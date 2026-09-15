@@ -7,7 +7,7 @@
 (executable
  (modes exe)
  (name gen_powershell_binding)
- (modules gen_powershell_binding common_functions)
+ (modules gen_powershell_binding gen_powershell_help common_functions)
  (libraries astring CommonFunctions curated_examples mustache xapi-datamodel))
 
 (test
