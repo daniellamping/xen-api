@@ -7,21 +7,22 @@
 
    gen_powershell_binding gives every cmdlet an example built from its family's
    idiom, which is right for the bulk of the SDK but cannot show why you would
-   reach for a thing. The entries here are adapted from the XenServer SDK
-   example workflows, which are written against this module and run end to end
-   against a simulated pool, so they are real usage rather than invention. They
-   are deliberately a small selection: the ones that carry an idiom a reader
-   would otherwise have to work out - the asynchronous form, a dynamic
-   parameter taking an object, a field that is written from one side and read
-   from the other.
+   reach for a thing. The entries here are deliberately a small selection: the
+   ones that carry an idiom a reader would otherwise have to work out - the
+   asynchronous form, a dynamic parameter taking an object, a field that is
+   written from one side and read from the other.
 
    These are appended after the generated example, so each cmdlet reads from
    the simplest form to the most involved.
 
    KEEPING THEM HONEST
 
-   Vendored examples rot quietly, so nothing here is taken on trust:
+   Hand-written examples rot quietly as the datamodel moves, so nothing here is
+   taken on trust:
 
+     - test_gen_powershell checks every entry in this file: that it names a
+       cmdlet once, that the snippet is written at a prompt and invokes the
+       cmdlet it is filed under, and that it carries an explanation;
      - gen_powershell_binding fails to build if an entry names a cmdlet it does
        not generate, so a renamed or withdrawn cmdlet cannot leave a stale
        entry behind;
