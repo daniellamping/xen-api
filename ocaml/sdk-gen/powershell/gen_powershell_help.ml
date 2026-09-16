@@ -502,8 +502,54 @@ and help_operate_on ?(include_uuid_name = true) obj classname rest =
   | None ->
       sprintf "PS> %s %s" rest (help_selector ~include_uuid_name obj classname)
 
-(* A plausible literal for an example, chosen from the parameter's C# type so
-   that the line reads like something a caller would actually type. *)
+(* The value to pass for a message's parameter, and the line that obtains it.
+   A reference is the case worth the trouble: "$value" tells the reader
+   nothing, where naming the cmdlet that returns one tells them everything.
+   Selecting the first of the collection keeps the line valid for every class,
+   including those with neither a name_label nor a uuid. *)
+and help_message_argument ?(verb = "Set") classname m =
+  let typ = get_message_type m classname verb in
+  let from_type () = (None, help_value_placeholder ~verb typ) in
+  match List.find_opt (fun p -> not (is_class p classname)) m.msg_params with
+  | Some {param_type= Ref cls; _} ->
+      let var = sprintf "$%s" (ocaml_class_to_csharp_local_var cls) in
+      ( Some
+          (sprintf "PS> %s = Get-Xen%s | Select-Object -First 1" var
+             (ocaml_class_to_csharp_class cls)
+          )
+      , var
+      )
+  | Some {param_type= Enum _ as ty; _} -> (
+    (* One of the values the parameter accepts reads better than a variable,
+       and Get-Help lists the rest just above. *)
+    match enum_values_of_ty ty with
+    | v :: _ ->
+        (None, v)
+    | [] ->
+        from_type ()
+  )
+  | _ when String.starts_with ~prefix:"KeyValuePair" typ ->
+      (* Adding to a map field takes one entry of it, and a hashtable does not
+         bind to a KeyValuePair parameter: the reader has to construct one.
+         Build it on its own line - inline it is too long to read, and the
+         command is the part worth looking at. *)
+      let accelerator =
+        typ
+        |> String.map (function '<' -> '[' | '>' -> ']' | c -> c)
+        |> String.split_on_char ' '
+        |> String.concat ""
+      in
+      ( Some
+          (sprintf
+             "PS> $entry = [System.Collections.Generic.%s]::new(\"region\", \
+              \"emea\")"
+             accelerator
+          )
+      , "$entry"
+      )
+  | _ ->
+      from_type ()
+
 and help_value_placeholder ?(verb = "Set") typ =
   let str =
     if verb = "Set" then
@@ -523,6 +569,10 @@ and help_value_placeholder ?(verb = "Set") typ =
       "0.0"
   | "string[]" ->
       "\"tag1\""
+  | "Hashtable" | "hashtable" ->
+      (* Setting a map field replaces the whole map, so the value is a
+         hashtable rather than the single entry an Add takes. *)
+      "@{ \"key\" = \"value\" }"
   | _ ->
       "$value"
 
@@ -943,10 +993,18 @@ and help_for_class obj =
           | None ->
               []
           | Some (field, m) ->
-              let value =
-                help_value_placeholder ~verb (get_message_type m classname verb)
+              (* An Add, Remove or Set message the datamodel generated for a
+                 field really is a field operation, and a sentence built from
+                 the field name describes it. One written by hand is a domain
+                 operation that merely starts with the same verb - Rate_limit's
+                 add_caller attaches a caller to a limiter, it does not add to
+                 a "Caller" field - so use the message's own documentation and
+                 say what it does. *)
+              let field_op =
+                match m.msg_tag with FromField _ -> true | _ -> false
               in
-              let one =
+              let setup, value = help_message_argument ~verb classname m in
+              let call =
                 if verb = "Set" then
                   help_operate_on obj classname
                     (sprintf "Set-Xen%s -%s %s" stem field value)
@@ -955,30 +1013,55 @@ and help_for_class obj =
                     (help_selector obj classname)
                     field value
               in
+              let code =
+                match setup with Some s -> s ^ "\n" ^ call | None -> call
+              in
+              let verbed past =
+                if field_op then
+                  past
+                else
+                  verb
+              in
               [
-                help_example one
+                help_example code
                   ~title:
-                    (sprintf "%s the %s field"
-                       ( match verb with
-                       | "Set" ->
-                           "Set"
-                       | "Add" ->
-                           "Add to"
-                       | _ ->
-                           "Remove from"
-                       )
-                       field
+                    ( if field_op then
+                        sprintf "%s the %s field"
+                          ( match verb with
+                          | "Set" ->
+                              "Set"
+                          | "Add" ->
+                              "Add to"
+                          | _ ->
+                              "Remove from"
+                          )
+                          field
+                      else
+                        sprintf "%s a %s" (verbed verb)
+                          (String.lowercase_ascii field)
                     )
-                  (sprintf "%s the %s field of a %s."
-                     ( match verb with
-                     | "Set" ->
-                         "Sets"
-                     | "Add" ->
-                         "Adds a value to"
-                     | _ ->
-                         "Removes a value from"
-                     )
-                     field stem
+                  ( if field_op then
+                      sprintf "%s the %s field of a %s.%s"
+                        ( match verb with
+                        | "Set" ->
+                            "Sets"
+                        | "Add" ->
+                            "Adds a value to"
+                        | _ ->
+                            "Removes a value from"
+                        )
+                        field stem
+                        ( if
+                            String.starts_with ~prefix:"KeyValuePair"
+                              (get_message_type m classname verb)
+                          then
+                            " The parameter takes one entry of the map; a \
+                             hashtable does not bind to it."
+                          else
+                            ""
+                        )
+                    else
+                      m.msg_doc
                   )
               ]
         in
