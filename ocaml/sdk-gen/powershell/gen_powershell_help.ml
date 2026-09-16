@@ -54,6 +54,10 @@ type help_parameter = {
    that does not exist. *)
 let curated_used = ref []
 
+(* Take the first [n], which is how a family tops its examples up to three
+   without inventing anything: the list is already in best-first order. *)
+let help_take n l = List.filteri (fun i _ -> i < n) l
+
 let rec gen_help () =
   let class_commands =
     List.concat_map help_for_class (List.filter generated classes)
@@ -165,31 +169,49 @@ and help_http_actions () =
         else
           ""
       in
-      let example =
-        help_example
-          ~title:
+      let path =
+        if is_put then
+          "C:\\upload.dat"
+        else
+          "C:\\download.dat"
+      in
+      let base =
+        sprintf "PS> %s -XenHost \"myserver\" -Path \"%s\"%s" cmdlet path
+          uuid_arg
+      in
+      let examples =
+        [
+          help_example
+            ~title:
+              ( if is_put then
+                  "Upload a file to the server"
+                else
+                  "Download a file from the server"
+              )
+            base
             ( if is_put then
-                "Upload a file to the server"
+                "Uploads the contents of the local file to the server."
               else
-                "Download a file from the server"
+                "Downloads from the server into the local file."
             )
-          (sprintf "PS> %s -XenHost \"myserver\" -Path \"%s\"%s" cmdlet
-             ( if is_put then
-                 "C:\\upload.dat"
-               else
-                 "C:\\download.dat"
-             )
-             uuid_arg
-          )
-          ( if is_put then
-              "Uploads the contents of the local file to the server."
-            else
-              "Downloads from the server into the local file."
-          )
+          (* These cmdlets talk to the server over HTTP rather than through the
+             API, so the things worth showing after the plain call are the ones
+             that differ from every other cmdlet: the transfer's own timeout,
+             and running it against a session you already hold. *)
+        ; help_example ~title:"Set a timeout for the transfer"
+            (sprintf "%s -TimeoutMs 600000" base)
+            "Gives the transfer ten minutes. The timeout covers the HTTP \
+             request, not the API call that set it up."
+        ; help_example ~title:"Use an existing session"
+            (sprintf "%s -SessionOpaqueRef $session.opaque_ref" base)
+            "Runs against a session already opened with Connect-XenServer \
+             rather than the default one, which is how a script drives more \
+             than one server at a time."
+        ]
       in
       help_command ~name:cmdlet ~synopsis ~description
         ~parameters:((delegate :: action_args) @ help_http_common_params ())
-        ~shouldprocess:is_put ~outputs:["void"] ~examples:[example] ()
+        ~shouldprocess:is_put ~outputs:["void"] ~examples ()
   )
 
 (* Connect-XenServer, Disconnect-XenServer, Get-XenSession, Wait-XenTask,
@@ -220,6 +242,15 @@ and help_handwritten () =
           help_example ~title:"Convert an object to a reference"
             "PS> Get-XenVM -Name \"Demo VM\" | ConvertTo-XenRef"
             "Converts a VM object into the XenRef that other cmdlets accept."
+        ; help_example ~title:"Convert several objects at once"
+            "PS> Get-XenVM | ConvertTo-XenRef"
+            "The whole collection is converted, one reference out for each \
+             object in."
+        ; help_example ~title:"Keep a reference for later"
+            "PS> $ref = Get-XenVM -Name \"Demo VM\" | ConvertTo-XenRef\n\
+             PS> Invoke-XenVM -Ref $ref -XenAction Start"
+            "A reference stays valid while the object does, so it can be held \
+             and passed to the cmdlets that take -Ref."
         ]
       ()
   ]
@@ -502,6 +533,62 @@ and help_operate_on ?(include_uuid_name = true) obj classname rest =
   | None ->
       sprintf "PS> %s %s" rest (help_selector ~include_uuid_name obj classname)
 
+(* Every distinct way to name an object, best first: piped from the getter,
+   then by each field the class actually has. A cmdlet that has nothing else to
+   vary gets its further examples from this, which is worth a reader's time -
+   which of -Ref, -Uuid, -Name and the object itself a cmdlet takes, and that
+   they are separate parameter sets, is a real source of confusion. *)
+and help_ways_to_name ?(include_uuid_name = true) obj classname rest =
+  let stem = ocaml_class_to_csharp_class classname in
+  let has_name obj = include_uuid_name && has_name obj in
+  let has_uuid obj = include_uuid_name && has_uuid obj in
+  let piped =
+    match help_getter_call obj classname with
+    | Some g ->
+        [
+          ( sprintf "PS> %s | %s" g rest
+          , "piped from the getter"
+          , "The object is piped in, which is the usual way once you already \
+             have it."
+          )
+        ]
+    | None ->
+        []
+  in
+  let named =
+    if has_name obj then
+      [
+        ( sprintf "PS> %s -Name \"Demo %s\"" rest stem
+        , "by name"
+        , "-Name matches on name_label, which is not unique, so every match is \
+           operated on."
+        )
+      ]
+    else
+      []
+  in
+  let by_uuid =
+    if has_uuid obj then
+      [
+        ( sprintf "PS> %s -Uuid 1871ac51-ce6b-efc3-7fd0-28bc65aa39ff" rest
+        , "by uuid"
+        , "-Uuid is the way to be sure of exactly one object."
+        )
+      ]
+    else
+      []
+  in
+  let by_ref =
+    [
+      ( sprintf "PS> %s -Ref OpaqueRef:f433bf7b-2b0c-5f53-7018-7d195addb3ca" rest
+      , "by reference"
+      , "-Ref takes the opaque reference, which is what the API itself uses \
+         and what the records hold."
+      )
+    ]
+  in
+  piped @ named @ by_uuid @ by_ref
+
 (* The value to pass for a message's parameter, and the line that obtains it.
    A reference is the case worth the trouble: "$value" tells the reader
    nothing, where naming the cmdlet that returns one tells them everything.
@@ -576,15 +663,6 @@ and help_value_placeholder ?(verb = "Set") typ =
   | _ ->
       "$value"
 
-(* The first message of a family, used to name a representative field or
-   operation in that family's example. *)
-and help_first_message verb messages =
-  match messages with
-  | m :: _ ->
-      Some (cut_msg_name (pascal_case m.msg_name) verb, m)
-  | [] ->
-      None
-
 and help_command ~name ~synopsis ~description ?(parameters = [])
     ?(common = true) ?(shouldprocess = false) ?async ?(outputs = [])
     ?(examples = []) () =
@@ -619,17 +697,49 @@ and help_command ~name ~synopsis ~description ?(parameters = [])
   (* Reflection derived INPUTS from the parameters that accept pipeline input;
      take them from the same place rather than restating them, so the two
      cannot drift apart. *)
-  (* Where a cmdlet has curated examples, keep only the first generated one as
-     the plain form and let the curated ones carry the rest; the generated
-     asynchronous example would otherwise repeat one of them. *)
+  (* Where a cmdlet has curated examples, lead with the plain generated form
+     and let the curated ones carry the rest, topping back up from the
+     remaining generated ones only if that leaves fewer than three. A curated
+     example says more than a generated one, but a cmdlet should not end up
+     with fewer examples for having been given better ones. *)
   let curated = Curated_examples.for_cmdlet name in
   let all_examples =
     if curated = [] then
       examples
     else (
       curated_used := name :: !curated_used ;
-      (match examples with e :: _ -> [e] | [] -> []) @ curated
+      let first, rest =
+        match examples with e :: r -> ([e], r) | [] -> ([], [])
+      in
+      let kept = first @ curated in
+      kept @ help_take (3 - List.length kept) rest
     )
+  in
+  (* A class with neither a name_label nor a uuid, or with a single field to
+     operate on, can run out of things to vary. Fall back to the session
+     parameter: every cmdlet takes it, and driving more than one server from
+     the same shell is worth knowing about. *)
+  let all_examples =
+    match all_examples with
+    | (_, code, _) :: _ when List.length all_examples < 3 ->
+        all_examples
+        @ help_take
+            (3 - List.length all_examples)
+            [
+              help_example ~title:"Run against a particular session"
+                (code ^ " -SessionOpaqueRef $session.opaque_ref")
+                "Every cmdlet takes -SessionOpaqueRef, which runs it against a \
+                 session opened with Connect-XenServer rather than the default \
+                 one. It is how a script drives more than one server at a \
+                 time."
+            ; help_example ~title:"Carry on past a failure"
+                (code ^ " -BestEffort")
+                "Every cmdlet takes -BestEffort, which reports a failure as a \
+                 non-terminating error and moves to the next object rather \
+                 than stopping the pipeline."
+            ]
+    | _ ->
+        all_examples
   in
   let inputs =
     parameters
@@ -880,18 +990,25 @@ and help_for_class obj =
         help_example
           ~title:(sprintf "List every %s" stem)
           (sprintf "PS> Get-Xen%s" stem)
-          (sprintf "Retrieves all %s objects from the server." stem)
-        ::
-        ( if has_name obj || has_uuid obj then
-            [
-              help_example
-                ~title:(sprintf "Retrieve one %s" stem)
-                (sprintf "PS> Get-Xen%s %s" stem (help_selector obj classname))
-                (sprintf "Retrieves a single %s." stem)
-            ]
-          else
-            []
-        )
+          (sprintf
+             "Retrieves all %s objects from the server. With no parameters the \
+              cmdlet fetches the whole collection."
+             stem
+          )
+        :: List.map
+             (fun (code, how, why) ->
+               help_example
+                 ~title:(sprintf "Retrieve one %s %s" stem how)
+                 code
+                 (sprintf "Retrieves a single %s. %s" stem why)
+             )
+             (* The getter is its own way of naming, so drop the piped form. *)
+             (help_take 2
+                (List.filter
+                   (fun (_, how, _) -> how <> "piped from the getter")
+                   (help_ways_to_name obj classname (sprintf "Get-Xen%s" stem))
+                )
+             )
       in
       [
         help_command ~name:(sprintf "Get-Xen%s" stem)
@@ -919,25 +1036,67 @@ and help_for_class obj =
                 else
                   m.msg_doc
               )
-              (* The Hashtable set is shown rather than the field set: it is
-                 the one form that reads the same for every class, whatever
-                 fields the class happens to have. *)
+              (* One example per parameter set, because the three ways of
+                 describing the new object are the thing a reader has to choose
+                 between and the syntax block alone does not say why you would
+                 pick one. *)
             ~examples:
-              [
-                help_example
-                  ~title:(sprintf "Create a %s" stem)
-                  (sprintf
-                     "PS> New-Xen%s -HashTable @{ name_label = \"Demo %s\" } \
-                      -PassThru"
-                     stem stem
-                  )
-                  (sprintf
-                     "Creates a %s from a hashtable of field names to values. \
-                      Use Get-Help New-Xen%s -Full to see the field parameters \
-                      that can be given instead."
-                     stem stem
-                  )
-              ]
+              (let fields = help_ctor_field_params obj m in
+               [
+                 help_example
+                   ~title:(sprintf "Create a %s from a table of fields" stem)
+                   (sprintf
+                      "PS> New-Xen%s -HashTable @{ name_label = \"Demo %s\" } \
+                       -PassThru"
+                      stem stem
+                   )
+                   (sprintf
+                      "The keys are the API's field names, so this form reads \
+                       the same for every class whatever fields it happens to \
+                       have. -PassThru returns the new %s."
+                      stem
+                   )
+               ]
+               @ ( match fields with
+                 | p :: _ ->
+                     [
+                       help_example
+                         ~title:(sprintf "Create a %s from parameters" stem)
+                         (sprintf "PS> New-Xen%s -%s %s -PassThru" stem
+                            p.hp_name
+                            (help_value_placeholder p.hp_type)
+                         )
+                         (sprintf
+                            "The same thing with one parameter per field, \
+                             which is the form that tab-completes. Get-Help \
+                             New-Xen%s -Full lists them all."
+                            stem
+                         )
+                     ]
+                 | [] ->
+                     []
+                 )
+               @
+               (* Only the classes with a get_all_records message have a
+                  getter to take the template from. *)
+               if List.mem classname classes_with_records then
+                 [
+                   help_example
+                     ~title:(sprintf "Create a %s from an existing one" stem)
+                     (sprintf
+                        "PS> $record = Get-Xen%s | Select-Object -First 1\n\
+                         PS> New-Xen%s -Record $record -PassThru"
+                        stem stem
+                     )
+                     (sprintf
+                        "-Record takes a whole %s record, so an existing \
+                         object can be used as the template for a new one."
+                        stem
+                     )
+                 ]
+               else
+                 []
+              )
             ~parameters:
               (help_passthru ()
               :: help_param ~required:true ~sets:["Hashtable"] "HashTable"
@@ -988,82 +1147,120 @@ and help_for_class obj =
         let async = List.exists (fun m -> m.msg_async) ms in
         (* about_XenServer.help.txt shows a setter piped from its getter, and
            the adders and property removers naming the object directly. *)
-        let examples =
-          match help_first_message verb ms with
+        (* An Add, Remove or Set message the datamodel generated for a field
+           really is a field operation, and a sentence built from the field
+           name describes it. One written by hand is a domain operation that
+           merely starts with the same verb - Rate_limit's add_caller attaches
+           a caller to a limiter, it does not add to a "Caller" field - so use
+           the message's own documentation and say what it does. *)
+        let field_of m = cut_msg_name (pascal_case m.msg_name) verb in
+        let is_field_op m =
+          match m.msg_tag with FromField _ -> true | _ -> false
+        in
+        let title_for m =
+          let field = field_of m in
+          if is_field_op m then
+            sprintf "%s the %s field"
+              ( match verb with
+              | "Set" ->
+                  "Set"
+              | "Add" ->
+                  "Add to"
+              | _ ->
+                  "Remove from"
+              )
+              field
+          else
+            sprintf "%s a %s" verb (String.lowercase_ascii field)
+        in
+        let remark_for m =
+          if is_field_op m then
+            sprintf "%s the %s field of a %s.%s"
+              ( match verb with
+              | "Set" ->
+                  "Sets"
+              | "Add" ->
+                  "Adds a value to"
+              | _ ->
+                  "Removes a value from"
+              )
+              (field_of m) stem
+              ( if
+                  String.starts_with ~prefix:"KeyValuePair"
+                    (get_message_type m classname verb)
+                then
+                  " The parameter takes one entry of the map; a hashtable does \
+                   not bind to it."
+                else
+                  ""
+              )
+          else
+            m.msg_doc
+        in
+        let invocation m =
+          sprintf "%s-Xen%s%s -%s %s" verb stem suffix (field_of m)
+            (snd (help_message_argument ~verb classname m))
+        in
+        let with_setup m code =
+          match fst (help_message_argument ~verb classname m) with
+          | Some s ->
+              s ^ "\n" ^ code
           | None ->
-              []
-          | Some (field, m) ->
-              (* An Add, Remove or Set message the datamodel generated for a
-                 field really is a field operation, and a sentence built from
-                 the field name describes it. One written by hand is a domain
-                 operation that merely starts with the same verb - Rate_limit's
-                 add_caller attaches a caller to a limiter, it does not add to
-                 a "Caller" field - so use the message's own documentation and
-                 say what it does. *)
-              let field_op =
-                match m.msg_tag with FromField _ -> true | _ -> false
-              in
-              let setup, value = help_message_argument ~verb classname m in
-              let call =
-                if verb = "Set" then
-                  help_operate_on obj classname
-                    (sprintf "Set-Xen%s -%s %s" stem field value)
-                else
-                  sprintf "PS> %s-Xen%s%s %s -%s %s" verb stem suffix
-                    (help_selector obj classname)
-                    field value
-              in
-              let code =
-                match setup with Some s -> s ^ "\n" ^ call | None -> call
-              in
-              let verbed past =
-                if field_op then
-                  past
-                else
-                  verb
-              in
-              [
-                help_example code
-                  ~title:
-                    ( if field_op then
-                        sprintf "%s the %s field"
-                          ( match verb with
-                          | "Set" ->
-                              "Set"
-                          | "Add" ->
-                              "Add to"
-                          | _ ->
-                              "Remove from"
-                          )
-                          field
-                      else
-                        sprintf "%s a %s" (verbed verb)
-                          (String.lowercase_ascii field)
-                    )
-                  ( if field_op then
-                      sprintf "%s the %s field of a %s.%s"
-                        ( match verb with
-                        | "Set" ->
-                            "Sets"
-                        | "Add" ->
-                            "Adds a value to"
-                        | _ ->
-                            "Removes a value from"
-                        )
-                        field stem
-                        ( if
-                            String.starts_with ~prefix:"KeyValuePair"
-                              (get_message_type m classname verb)
-                          then
-                            " The parameter takes one entry of the map; a \
-                             hashtable does not bind to it."
-                          else
-                            ""
-                        )
-                    else
-                      m.msg_doc
+              code
+        in
+        let call_for m =
+          if verb = "Set" then
+            help_operate_on obj classname (invocation m)
+          else
+            sprintf "PS> %s %s" (invocation m) (help_selector obj classname)
+        in
+        let example_for m =
+          help_example
+            (with_setup m (call_for m))
+            ~title:(title_for m) (remark_for m)
+        in
+        (* One example per field, up to three. Where the class has only one
+           field to operate on, vary how the object is named instead: which of
+           -Ref, -Uuid, -Name and the piped object a cmdlet takes is worth as
+           much to a reader as another field would be. *)
+        let examples =
+          let per_field = List.map example_for (help_take 3 ms) in
+          let wanted = 3 - List.length per_field in
+          if wanted <= 0 then
+            per_field
+          else
+            per_field
+            @
+            match ms with
+            | m :: _ ->
+                let already = call_for m in
+                List.map
+                  (fun (code, how, why) ->
+                    (* The line that builds the argument is not repeated: the
+                       reader has it from the first example, and repeating a
+                       KeyValuePair construction three times buries the command
+                       the example is about. *)
+                    help_example code
+                      ~title:(sprintf "%s %s" (title_for m) how)
+                      (sprintf "%s %s%s" (remark_for m) why
+                         ( match
+                             fst (help_message_argument ~verb classname m)
+                           with
+                         | Some _ ->
+                             " The value is built as in the first example."
+                         | None ->
+                             ""
+                         )
+                      )
                   )
-              ]
+                  (help_take wanted
+                     (List.filter
+                        (fun (code, _, _) -> code <> already)
+                        (help_ways_to_name obj classname (invocation m))
+                     )
+                  )
+            | [] ->
+                []
         in
         [
           help_command
@@ -1202,20 +1399,75 @@ and help_for_class obj =
                 sprintf "Gets the %s property of a %s." name stem
             )
         in
-        (* One example for an Invoke cmdlet, whose operations differ enough
-           that a second adds nothing the list above does not already say.
-           Three for a property getter, which is enough to show that the
-           parameter chooses among the properties and that the rest work the
-           same way, without restating a list that runs to a hundred entries
-           on some classes. *)
+        (* Three examples on a property getter, which is enough to show that
+           the parameter chooses among the properties and that the rest work
+           the same way, without restating a list that runs to a hundred
+           entries on some classes. An Invoke cmdlet leads with one operation
+           and follows it with the asynchronous form, which is the thing worth
+           learning; a second operation would say no more than the list above
+           already does. *)
         let shown =
           if verb = "Invoke" then
-            match ordered with n :: _ -> [n] | [] -> []
+            help_take 1 ordered
           else
-            List.filteri (fun i _ -> i < 3) ordered
+            help_take 3 ordered
+        in
+        (* Where the class has fewer than three properties, vary how the object
+           is named instead of leaving the cmdlet with one example. *)
+        let topped_up =
+          let wanted =
+            3
+            - List.length shown
+            -
+            if async && verb = "Invoke" then
+              1
+            else
+              0
+          in
+          if wanted <= 0 then
+            []
+          else
+            match ordered with
+            | n :: _ ->
+                let rest =
+                  sprintf "%s-Xen%s%s -Xen%s %s" verb stem suffix enum_param n
+                in
+                List.map
+                  (fun (code, how, why) ->
+                    help_example
+                      ~title:
+                        ( if verb = "Invoke" then
+                            sprintf "Run the %s operation %s" n how
+                          else
+                            sprintf "Get the %s property %s" n how
+                        )
+                      code
+                      ( if verb = "Invoke" then
+                          sprintf "Invokes the %s operation on a %s. %s" n stem
+                            why
+                        else
+                          sprintf "Gets the %s property of a %s. %s" n stem why
+                      )
+                  )
+                  (* Drop whichever way the first example already used, rather
+                     than assuming it was the first of the list: a property
+                     getter names the object directly where an Invoke cmdlet
+                     pipes it in. *)
+                  (let already =
+                     help_operate_on ~include_uuid_name obj classname rest
+                   in
+                   help_take wanted
+                     (List.filter
+                        (fun (code, _, _) -> code <> already)
+                        (help_ways_to_name ~include_uuid_name obj classname rest)
+                     )
+                  )
+            | [] ->
+                []
         in
         let examples =
           List.map one shown
+          @ topped_up
           @
           if async && verb = "Invoke" then
             [
@@ -1311,12 +1563,28 @@ and help_for_class obj =
               @ [help_passthru ()]
               )
             ~examples:
-              [
-                help_example
-                  ~title:(sprintf "Delete a %s" stem)
-                  (help_operate_on obj classname (sprintf "Remove-Xen%s" stem))
-                  (sprintf "Deletes a %s." stem)
-              ]
+              (let cmd = sprintf "Remove-Xen%s" stem in
+               List.map
+                 (fun (code, how, why) ->
+                   help_example
+                     ~title:(sprintf "Delete a %s %s" stem how)
+                     code
+                     (sprintf "Deletes a %s. %s" stem why)
+                 )
+                 (help_take 2 (help_ways_to_name obj classname cmd))
+               (* -WhatIf earns its place on a cmdlet that deletes: it is how
+                  you see what a command would take out before it does. *)
+               @ [
+                   help_example ~title:"See what would be deleted"
+                     (sprintf "%s -WhatIf" (help_operate_on obj classname cmd))
+                     (sprintf
+                        "Reports the %s that would be deleted without deleting \
+                         anything. Every cmdlet that changes the server takes \
+                         -WhatIf and -Confirm."
+                        stem
+                     )
+                 ]
+              )
             ~shouldprocess:true
             ~outputs:
               (( if m.msg_async then
