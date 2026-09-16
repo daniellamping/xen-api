@@ -1153,62 +1153,69 @@ and help_for_class obj =
            parameter the reader has not met yet. Falling back to ms, which is
            non-empty in this branch, means the match is total without a
            partial head. *)
-        let representative =
+        (* The names the enum parameter accepts, best example first. The
+           identity fields are the least illustrative choice - they are on the
+           object already, so reading one back through the cmdlet does not show
+           why the cmdlet is there - so they sort last. *)
+        let ordered =
+          let name m = cut_msg_name (pascal_case m.msg_name) verb in
           let plain =
             List.filter
               (fun m -> not (is_message_with_dynamic_params classname m))
               ms
           in
-          (* The identity fields are the least illustrative choice: they are on
-             the object already, so an example that reads one does not show why
-             the cmdlet is there. Prefer anything else, then fall back. Every
-             value the parameter takes is listed in the syntax and described
-             one by one above, so the example does not have to enumerate
-             them. *)
-          let telling =
-            List.filter
-              (fun m ->
-                not
-                  (List.mem
-                     (String.lowercase_ascii
-                        (cut_msg_name (pascal_case m.msg_name) verb)
-                     )
-                     ["uuid"; "namelabel"; "namedescription"]
-                  )
-              )
-              plain
+          let identity m =
+            List.mem
+              (String.lowercase_ascii (name m))
+              ["uuid"; "namelabel"; "namedescription"]
           in
-          match telling @ plain @ ms with
-          | m :: _ ->
-              cut_msg_name (pascal_case m.msg_name) verb
-          | [] ->
-              ""
+          List.map name
+            (List.filter (fun m -> not (identity m)) plain @ plain @ ms)
+          |> List.fold_left
+               (fun acc n ->
+                 if List.mem n acc then
+                   acc
+                 else
+                   acc @ [n]
+               )
+               []
         in
+        let representative = match ordered with n :: _ -> n | [] -> "" in
         (* Get-Xen<Class>Property takes neither -Name/-Uuid nor -PassThru; only
            Invoke-Xen<Class> has them, so only it gets the asynchronous
            example. *)
         let include_uuid_name = verb = "Invoke" in
-        let examples =
-          [
-            help_example
-              ~title:
-                ( if verb = "Invoke" then
-                    sprintf "Run the %s operation" representative
-                  else
-                    sprintf "Get the %s property" representative
-                )
-              (help_operate_on ~include_uuid_name obj classname
-                 (sprintf "%s-Xen%s%s -Xen%s %s" verb stem suffix enum_param
-                    representative
-                 )
-              )
+        let one name =
+          help_example
+            ~title:
               ( if verb = "Invoke" then
-                  sprintf "Invokes the %s operation on a %s." representative
-                    stem
+                  sprintf "Run the %s operation" name
                 else
-                  sprintf "Gets the %s property of a %s." representative stem
+                  sprintf "Get the %s property" name
               )
-          ]
+            (help_operate_on ~include_uuid_name obj classname
+               (sprintf "%s-Xen%s%s -Xen%s %s" verb stem suffix enum_param name)
+            )
+            ( if verb = "Invoke" then
+                sprintf "Invokes the %s operation on a %s." name stem
+              else
+                sprintf "Gets the %s property of a %s." name stem
+            )
+        in
+        (* One example for an Invoke cmdlet, whose operations differ enough
+           that a second adds nothing the list above does not already say.
+           Three for a property getter, which is enough to show that the
+           parameter chooses among the properties and that the rest work the
+           same way, without restating a list that runs to a hundred entries
+           on some classes. *)
+        let shown =
+          if verb = "Invoke" then
+            match ordered with n :: _ -> [n] | [] -> []
+          else
+            List.filteri (fun i _ -> i < 3) ordered
+        in
+        let examples =
+          List.map one shown
           @
           if async && verb = "Invoke" then
             [
