@@ -167,6 +167,12 @@ and help_http_actions () =
       in
       let example =
         help_example
+          ~title:
+            ( if is_put then
+                "Upload a file to the server"
+              else
+                "Download a file from the server"
+            )
           (sprintf "PS> %s -XenHost \"myserver\" -Path \"%s\"%s" cmdlet
              ( if is_put then
                  "C:\\upload.dat"
@@ -211,7 +217,8 @@ and help_handwritten () =
       ~outputs:["IXenObject"]
       ~examples:
         [
-          help_example "PS> Get-XenVM -Name \"Demo VM\" | ConvertTo-XenRef"
+          help_example ~title:"Convert an object to a reference"
+            "PS> Get-XenVM -Name \"Demo VM\" | ConvertTo-XenRef"
             "Converts a VM object into the XenRef that other cmdlets accept."
         ]
       ()
@@ -430,19 +437,33 @@ and enum_values_of_ty ty =
       []
 
 (* Examples are numbered by help_command once the generated and the curated
-   ones have been put together, so nothing here has to know its position. *)
-and help_example code remarks = (code, remarks)
+   ones have been put together, so nothing here has to know its position.
+   [title] says what the example shows; Get-Help puts it in the heading, the
+   way a reader coming from any other module expects. *)
+and help_example ?(title = "") code remarks = (title, code, remarks)
 
-and help_example_json n (code, remarks) =
+and help_example_json n (title, code, remarks) =
+  let heading =
+    if title = "" then
+      sprintf "Example %d" n
+    else
+      sprintf "Example %d: %s" n title
+  in
+  (* Pad to a fixed total rather than a fixed number of dashes. Get-Help indents
+     the heading by four and wraps at the console width, so a fixed count makes
+     a titled heading spill onto a second line in an 80-column console and stop
+     looking like a separator. Padding to a constant also lines the separators
+     up with each other whatever the titles are. *)
+  let width = 74 in
+  let dashes = max 6 (width - String.length heading - 2) in
+  let left = dashes / 2 in
   `O
     [
       ( "title"
       , `String
           (escape_xml
-             (sprintf
-                "-------------------------- Example %d \
-                 --------------------------"
-                n
+             (sprintf "%s %s %s" (String.make left '-') heading
+                (String.make (dashes - left) '-')
              )
           )
       )
@@ -807,12 +828,14 @@ and help_for_class obj =
     if List.mem classname classes_with_records then
       let ex =
         help_example
+          ~title:(sprintf "List every %s" stem)
           (sprintf "PS> Get-Xen%s" stem)
           (sprintf "Retrieves all %s objects from the server." stem)
         ::
         ( if has_name obj || has_uuid obj then
             [
               help_example
+                ~title:(sprintf "Retrieve one %s" stem)
                 (sprintf "PS> Get-Xen%s %s" stem (help_selector obj classname))
                 (sprintf "Retrieves a single %s." stem)
             ]
@@ -852,6 +875,7 @@ and help_for_class obj =
             ~examples:
               [
                 help_example
+                  ~title:(sprintf "Create a %s" stem)
                   (sprintf
                      "PS> New-Xen%s -HashTable @{ name_label = \"Demo %s\" } \
                       -PassThru"
@@ -933,6 +957,18 @@ and help_for_class obj =
               in
               [
                 help_example one
+                  ~title:
+                    (sprintf "%s the %s field"
+                       ( match verb with
+                       | "Set" ->
+                           "Set"
+                       | "Add" ->
+                           "Add to"
+                       | _ ->
+                           "Remove from"
+                       )
+                       field
+                    )
                   (sprintf "%s the %s field of a %s."
                      ( match verb with
                      | "Set" ->
@@ -1053,6 +1089,7 @@ and help_for_class obj =
         let examples =
           [
             help_example
+              ~title:(sprintf "Run the %s operation" representative)
               (help_operate_on ~include_uuid_name obj classname
                  (sprintf "%s-Xen%s%s -Xen%s %s" verb stem suffix enum_param
                     representative
@@ -1069,6 +1106,7 @@ and help_for_class obj =
           if async && verb = "Invoke" then
             [
               help_example
+                ~title:(sprintf "Run %s asynchronously" representative)
                 (sprintf
                    "PS> Invoke-Xen%s %s -Xen%s %s -Async -PassThru | \
                     Wait-XenTask -ShowProgress"
@@ -1161,6 +1199,7 @@ and help_for_class obj =
             ~examples:
               [
                 help_example
+                  ~title:(sprintf "Delete a %s" stem)
                   (help_operate_on obj classname (sprintf "Remove-Xen%s" stem))
                   (sprintf "Deletes a %s." stem)
               ]
