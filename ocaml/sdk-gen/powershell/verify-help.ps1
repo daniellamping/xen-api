@@ -201,7 +201,10 @@ Note "dynamicClaims" $dynClaims
 # them.
 foreach ($c in $cmdlets) {
     foreach ($ex in @((Get-Help $c.Name).examples.example | Where-Object { $_ })) {
-        $code = ($ex.code | Out-String).Trim() -replace "^PS>\s*", ""
+        # A prompt opens each statement; a statement continued over several
+        # lines is indented instead. Strip the prompts, keep the indentation,
+        # and what is left is the script the reader would paste.
+        $code = ($ex.code | Out-String).Trim() -replace "(?m)^PS>[ ]?", ""
         if (-not $code) { continue }
         Note "examples"
 

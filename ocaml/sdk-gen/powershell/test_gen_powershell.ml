@@ -711,12 +711,17 @@ module CuratedExamplesTest = struct
     in
     nl = 0 || go 0
 
-  (* Walk every (cmdlet, code, explanation) triple, tagging failures with the
+  (* Walk every (cmdlet, title, code, explanation), tagging failures with the
      cmdlet so a broken entry is named rather than merely counted. *)
   let iter_examples f =
     List.iter
-      (fun (cmdlet, es) -> List.iter (fun (code, expl) -> f cmdlet code expl) es)
+      (fun (cmdlet, es) ->
+        List.iter (fun (title, code, expl) -> f cmdlet title code expl) es
+      )
       examples
+
+  let lines s =
+    String.split_on_char '\n' s |> List.filter (fun l -> String.trim l <> "")
 
   let test_each_cmdlet_has_an_example () =
     List.iter
@@ -734,10 +739,15 @@ module CuratedExamplesTest = struct
       "each cmdlet appears once; a second entry would silently win"
       (List.length names) (List.length sorted)
 
-  (* Both halves reach the reader: the code becomes dev:code and the
-     explanation dev:remarks. An empty one renders as a blank example. *)
-  let test_code_and_explanation_present () =
-    iter_examples (fun cmdlet code expl ->
+  (* All three parts reach the reader: the title becomes the heading Get-Help
+     prints, the code dev:code and the explanation dev:remarks. An empty one
+     renders as a blank example. *)
+  let test_all_parts_present () =
+    iter_examples (fun cmdlet title code expl ->
+        Alcotest.(check bool)
+          (cmdlet ^ ": example has a title")
+          true
+          (String.trim title <> "") ;
         Alcotest.(check bool)
           (cmdlet ^ ": example code is not blank")
           true
@@ -748,20 +758,63 @@ module CuratedExamplesTest = struct
           (String.trim expl <> "")
     )
 
-  (* Get-Help renders examples verbatim; the prompt is what marks the line as
-     something to type, and every entry should look the same. *)
-  let test_code_is_written_at_a_prompt () =
-    iter_examples (fun cmdlet code _ ->
+  (* Titles are headings, not sentences: "Start a VM", not "Starts the VM." *)
+  let test_titles_read_as_headings () =
+    iter_examples (fun cmdlet title _ _ ->
+        let t = String.trim title in
         Alcotest.(check bool)
-          (cmdlet ^ ": example starts at a PS> prompt")
+          (cmdlet ^ ": title opens with a capital")
           true
-          (String.starts_with ~prefix:"PS> " (String.trim code))
+          (t <> "" && t.[0] = Char.uppercase_ascii t.[0]) ;
+        Alcotest.(check bool)
+          (cmdlet ^ ": title does not end with a full stop")
+          false
+          (t <> "" && t.[String.length t - 1] = '.') ;
+        (* Get-Help pads the heading with 26 dashes either side, so a long
+           title wraps and the separator stops looking like one. Terse titles
+           read better anyway. *)
+        Alcotest.(check bool)
+          (cmdlet ^ ": title is short enough not to wrap: " ^ t)
+          true
+          (String.length t <= 44)
+    )
+
+  (* Get-Help renders examples verbatim, so the layout has to carry the
+     meaning: a prompt opens each statement, and a statement continued over
+     several lines is indented instead. verify-help.ps1 strips the prompts on
+     exactly that rule before parsing the example, so a continuation that
+     wrongly carries one stops being part of the statement above it. *)
+  let test_prompts_open_statements () =
+    iter_examples (fun cmdlet _ code _ ->
+        let ls = lines code in
+        ( match ls with
+        | first :: _ ->
+            Alcotest.(check bool)
+              (cmdlet ^ ": example opens at a PS> prompt")
+              true
+              (String.starts_with ~prefix:"PS> " first)
+        | [] ->
+            ()
+        ) ;
+        List.iter
+          (fun line ->
+            Alcotest.(check bool)
+              (cmdlet
+              ^ ": line is a prompt or an indented continuation: "
+              ^ line
+              )
+              true
+              (String.starts_with ~prefix:"PS> " line
+              || String.starts_with ~prefix:"    " line
+              )
+          )
+          ls
     )
 
   (* An example filed under the wrong cmdlet is worse than no example: it is
      shown under a heading it does not illustrate. *)
   let test_example_invokes_its_own_cmdlet () =
-    iter_examples (fun cmdlet code _ ->
+    iter_examples (fun cmdlet _ code _ ->
         Alcotest.(check bool)
           (cmdlet ^ ": example actually invokes " ^ cmdlet)
           true (contains cmdlet code)
@@ -781,7 +834,7 @@ module CuratedExamplesTest = struct
         )
         0 s
     in
-    iter_examples (fun cmdlet code _ ->
+    iter_examples (fun cmdlet _ code _ ->
         let balanced l r = count l code = count r code in
         Alcotest.(check bool)
           (cmdlet ^ ": double quotes are balanced")
@@ -801,7 +854,7 @@ module CuratedExamplesTest = struct
   (* The explanations sit together in one EXAMPLES block, so they should read
      alike: a sentence, not a fragment. *)
   let test_explanations_read_as_sentences () =
-    iter_examples (fun cmdlet _ expl ->
+    iter_examples (fun cmdlet _ _ expl ->
         let e = String.trim expl in
         Alcotest.(check bool)
           (cmdlet ^ ": explanation opens with a capital")
@@ -831,8 +884,9 @@ module CuratedExamplesTest = struct
     [
       ("each_cmdlet_has_an_example", `Quick, test_each_cmdlet_has_an_example)
     ; ("no_duplicate_cmdlets", `Quick, test_no_duplicate_cmdlets)
-    ; ("code_and_explanation_present", `Quick, test_code_and_explanation_present)
-    ; ("code_is_written_at_a_prompt", `Quick, test_code_is_written_at_a_prompt)
+    ; ("all_parts_present", `Quick, test_all_parts_present)
+    ; ("titles_read_as_headings", `Quick, test_titles_read_as_headings)
+    ; ("prompts_open_statements", `Quick, test_prompts_open_statements)
     ; ( "example_invokes_its_own_cmdlet"
       , `Quick
       , test_example_invokes_its_own_cmdlet
