@@ -1159,7 +1159,26 @@ and help_for_class obj =
               (fun m -> not (is_message_with_dynamic_params classname m))
               ms
           in
-          match plain @ ms with
+          (* The identity fields are the least illustrative choice: they are on
+             the object already, so an example that reads one does not show why
+             the cmdlet is there. Prefer anything else, then fall back. Every
+             value the parameter takes is listed in the syntax and described
+             one by one above, so the example does not have to enumerate
+             them. *)
+          let telling =
+            List.filter
+              (fun m ->
+                not
+                  (List.mem
+                     (String.lowercase_ascii
+                        (cut_msg_name (pascal_case m.msg_name) verb)
+                     )
+                     ["uuid"; "namelabel"; "namedescription"]
+                  )
+              )
+              plain
+          in
+          match telling @ plain @ ms with
           | m :: _ ->
               cut_msg_name (pascal_case m.msg_name) verb
           | [] ->
@@ -1172,7 +1191,12 @@ and help_for_class obj =
         let examples =
           [
             help_example
-              ~title:(sprintf "Run the %s operation" representative)
+              ~title:
+                ( if verb = "Invoke" then
+                    sprintf "Run the %s operation" representative
+                  else
+                    sprintf "Get the %s property" representative
+                )
               (help_operate_on ~include_uuid_name obj classname
                  (sprintf "%s-Xen%s%s -Xen%s %s" verb stem suffix enum_param
                     representative
