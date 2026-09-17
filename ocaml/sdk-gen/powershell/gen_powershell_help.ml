@@ -25,6 +25,76 @@ open Common_functions
 open CommonFunctions
 module DU = Datamodel_utils
 
+(* The product a datamodel release name refers to: "clearwater" -> "XenServer
+   6.2". Numbered releases carry their own code_name ("23.24.0"), so one lookup
+   serves both. Falls back to the raw name rather than inventing one. *)
+let help_release_name code =
+  match
+    List.find_opt (fun r -> r.code_name = Some code) release_order_full
+  with
+  | Some r ->
+      r.branding
+  | None ->
+      code
+
+(* A sentence saying that this class, message or field is deprecated or gone,
+   and from which release.
+
+   One SDK serves every version of the product - XenServer 9, 8.4 and hosts
+   older than either - so a binding for something withdrawn years ago is not a
+   mistake to be cleaned up: a customer on an old host still needs it. What was
+   missing is any way for a reader to know. VMPP went in XenServer 6.2 and the
+   two metrics classes in 6.1, yet their cmdlets document themselves exactly
+   like live ones, so the first sign of trouble on a current host is
+   MESSAGE_REMOVED from a call the help just recommended.
+
+   No generator in the SDK reads lifecycle today, which is why this says it in
+   the help rather than acting on it. Removing the cmdlet would break the users
+   it still serves. *)
+let help_lifecycle_note ~noun (lc : Lifecycle.t) =
+  let at change =
+    List.fold_left
+      (fun acc (c, release, doc) ->
+        if c = change then Some (release, doc) else acc
+      )
+      None lc.Lifecycle.transitions
+  in
+  let because doc = if doc = "" then "" else sprintf " (%s)" doc in
+  match lc.Lifecycle.state with
+  | Lifecycle.Removed_s ->
+      let where, why =
+        match at Lifecycle.Removed with
+        | Some (r, d) ->
+            (sprintf " in %s" (help_release_name r), because d)
+        | None ->
+            ("", "")
+      in
+      Some
+        (sprintf
+           "This %s was removed%s%s. It is still part of the SDK so that it \
+            can be used against earlier hosts; a server that has removed it \
+            answers MESSAGE_REMOVED."
+           noun where why
+        )
+  | Lifecycle.Deprecated_s ->
+      let where, why =
+        match at Lifecycle.Deprecated with
+        | Some (r, d) ->
+            (sprintf " since %s" (help_release_name r), because d)
+        | None ->
+            ("", "")
+      in
+      Some (sprintf "This %s is deprecated%s%s." noun where why)
+  | _ ->
+      None
+
+(* Append a lifecycle note to a description, if there is one to make. *)
+let help_note_onto description = function
+  | Some note ->
+      sprintf "%s\n\n%s" description note
+  | None ->
+      description
+
 (* A parameter as it appears in the generated Get-Help content. [hp_sets] holds
    the names of the cmdlet parameter sets the parameter belongs to; an empty
    list means it belongs to all of them, which is how the generated cmdlets
@@ -1073,11 +1143,21 @@ and help_for_class obj =
   let classname = obj.name in
   let messages = obj.messages in
   let stem = ocaml_class_to_csharp_class classname in
+  (* A class-level note reaches every cmdlet of the class; a message-level one
+     is added on top where a cmdlet comes from one particular message. *)
+  let class_note = help_lifecycle_note ~noun:"class" obj.obj_lifecycle in
+  let described d = help_note_onto d class_note in
+  let described_msg d m =
+    help_note_onto (described d)
+      (help_lifecycle_note ~noun:"operation" m.msg_lifecycle)
+  in
   let class_desc =
-    if obj.description = "" then
-      sprintf "The %s class." stem
-    else
-      obj.description
+    described
+      ( if obj.description = "" then
+          sprintf "The %s class." stem
+        else
+          obj.description
+      )
   in
   let getter =
     if List.mem classname classes_with_records then
@@ -1126,10 +1206,13 @@ and help_for_class obj =
           help_command ~name:(sprintf "New-Xen%s" stem)
             ~synopsis:(sprintf "Creates a new %s object." stem)
             ~description:
-              ( if m.msg_doc = "" then
-                  sprintf "Creates a new %s." stem
-                else
-                  m.msg_doc
+              (described_msg
+                 ( if m.msg_doc = "" then
+                     sprintf "Creates a new %s." stem
+                   else
+                     m.msg_doc
+                 )
+                 m
               )
             ~examples:
               ( if is_real_constructor m then
@@ -1406,7 +1489,7 @@ and help_for_class obj =
         [
           help_command
             ~name:(sprintf "%s-Xen%s%s" verb stem suffix)
-            ~synopsis ~description:descr ~examples
+            ~synopsis ~description:(described descr) ~examples
             ~parameters:
               (help_identity_params obj classname ~mandatory_ref:true
                  ~include_xenobject:true ~include_uuid_name:true
@@ -1472,16 +1555,29 @@ and help_for_class obj =
     | [] ->
         []
     | ms ->
+        (* One cmdlet covers many operations here, and they do not share a
+           lifecycle - VM.snapshot_with_quiesce is gone while the rest of
+           Invoke-XenVM is current - so the note goes on the operation's own
+           line rather than on the cmdlet. *)
         let lines =
           List.map
             (fun m ->
-              sprintf "%s: %s"
+              let tag =
+                match m.msg_lifecycle.Lifecycle.state with
+                | Lifecycle.Removed_s ->
+                    " [removed]"
+                | Lifecycle.Deprecated_s ->
+                    " [deprecated]"
+                | _ ->
+                    ""
+              in
+              sprintf "%s: %s%s"
                 (cut_msg_name (pascal_case m.msg_name) verb)
-                m.msg_doc
+                m.msg_doc tag
             )
             ms
         in
-        let description = String.concat "\n" (intro :: lines) in
+        let description = described (String.concat "\n" (intro :: lines)) in
         let async = List.exists (fun m -> m.msg_async) ms in
         let actions =
           List.map (fun m -> cut_msg_name (pascal_case m.msg_name) verb) ms
@@ -1728,10 +1824,13 @@ and help_for_class obj =
             ~name:(sprintf "Remove-Xen%s" stem)
             ~synopsis:(sprintf "Deletes a %s object." stem)
             ~description:
-              ( if m.msg_doc = "" then
-                  sprintf "Destroys the specified %s object." stem
-                else
-                  m.msg_doc
+              (described_msg
+                 ( if m.msg_doc = "" then
+                     sprintf "Destroys the specified %s object." stem
+                   else
+                     m.msg_doc
+                 )
+                 m
               )
             ~parameters:
               (help_identity_params obj classname ~mandatory_ref:true
