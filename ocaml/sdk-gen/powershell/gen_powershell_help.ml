@@ -1523,6 +1523,35 @@ and help_for_class obj =
            Invoke-Xen<Class> has them, so only it gets the asynchronous
            example. *)
         let include_uuid_name = verb = "Invoke" in
+        (* An Invoke cmdlet makes the call either way, but writes the result
+           out only when -PassThru is given. An operation that returns
+           something - a snapshot's reference, a table of usage - therefore
+           looks as though it did nothing when the example omits it, so ask for
+           it wherever there is something to collect. A property getter writes
+           its value unconditionally and has no -PassThru to give. *)
+        let returns_a_value =
+          let named =
+            List.map
+              (fun m ->
+                ( cut_msg_name (pascal_case m.msg_name) verb
+                , m.msg_result <> None
+                )
+              )
+              ms
+          in
+          fun n ->
+            verb = "Invoke"
+            && match List.assoc_opt n named with Some r -> r | None -> false
+        in
+        let collect name code =
+          if returns_a_value name then code ^ " -PassThru" else code
+        in
+        let collected name why =
+          if returns_a_value name then
+            why ^ " -PassThru writes the result to the pipeline."
+          else
+            why
+        in
         let one name =
           help_example
             ~title:
@@ -1531,11 +1560,15 @@ and help_for_class obj =
                 else
                   sprintf "Get the %s property" name
               )
-            (help_operate_on ~include_uuid_name obj classname
-               (sprintf "%s-Xen%s%s -Xen%s %s" verb stem suffix enum_param name)
+            (collect name
+               (help_operate_on ~include_uuid_name obj classname
+                  (sprintf "%s-Xen%s%s -Xen%s %s" verb stem suffix enum_param
+                     name
+                  )
+               )
             )
             ( if verb = "Invoke" then
-                sprintf "Invokes the %s operation on a %s." name stem
+                collected name (sprintf "Invokes the %s operation on a %s." name stem)
               else
                 sprintf "Gets the %s property of a %s." name stem
             )
@@ -1582,10 +1615,12 @@ and help_for_class obj =
                           else
                             sprintf "Get the %s property %s" n how
                         )
-                      code
+                      (collect n code)
                       ( if verb = "Invoke" then
-                          sprintf "Invokes the %s operation on a %s. %s" n stem
-                            why
+                          collected n
+                            (sprintf "Invokes the %s operation on a %s. %s" n
+                               stem why
+                            )
                         else
                           sprintf "Gets the %s property of a %s. %s" n stem why
                       )
