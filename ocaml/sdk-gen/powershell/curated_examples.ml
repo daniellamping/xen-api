@@ -134,9 +134,9 @@ PS> Get-XenVM -Name "web-01" |
         ( "Create a VM from a table of fields"
         , {|PS> New-XenVM -HashTable @{
         name_label        = "web-03"
-        memory_static_max = 2GB
-        VCPUs_max         = 2
-        VCPUs_at_startup  = 2
+        memory_static_max = "2147483648"
+        VCPUs_max         = "2"
+        VCPUs_at_startup  = "2"
     } -PassThru|}
         , "The keys are the API's field names, so anything the class accepts \
            at creation can be set in one call. In practice most VMs are made \
@@ -187,7 +187,7 @@ PS> $vm.VBDs |
   ; ( "Invoke-XenVBD"
     , [
         ( "Detach and reattach a disk"
-        , {|PS> $vbd = Get-XenVBD -Uuid $vbdUuid
+        , {|PS> $vbd = Get-XenVBD | Where-Object { $_.type -eq "Disk" } | Select-Object -First 1
 PS> $vbd | Invoke-XenVBD -XenAction Unplug
 PS> $vbd | Invoke-XenVBD -XenAction Plug|}
         , "Unplug makes the disk no longer live to the guest but leaves it \
@@ -200,14 +200,14 @@ PS> $vbd | Invoke-XenVBD -XenAction Plug|}
   ; ( "Invoke-XenVDI"
     , [
         ( "Grow a disk that is not in use"
-        , {|PS> Get-XenVDI -Uuid $vdiUuid |
+        , {|PS> Get-XenVDI | Select-Object -First 1 |
     Invoke-XenVDI -XenAction Resize -Size 40GB|}
         , "Resize is for a disk no guest is writing to. A disk can only grow; \
            the size is in bytes, so PowerShell's GB suffix is the readable way \
            to give it."
         )
       ; ( "Grow a disk while the VM is running"
-        , {|PS> Get-XenVDI -Uuid $vdiUuid |
+        , {|PS> Get-XenVDI | Select-Object -First 1 |
     Invoke-XenVDI -XenAction ResizeOnline -Size 60GB|}
         , "Resizing a live disk is a different action rather than a flag on \
            the same one, because it tells the storage layer the guest is using \
