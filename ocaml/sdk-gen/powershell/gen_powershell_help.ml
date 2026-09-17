@@ -594,6 +594,70 @@ and help_ways_to_name ?(include_uuid_name = true) obj classname rest =
    nothing, where naming the cmdlet that returns one tells them everything.
    Selecting the first of the collection keeps the line valid for every class,
    including those with neither a name_label nor a uuid. *)
+(* Every parameter of a message, as lines that obtain the values and the
+   argument list that passes them.
+
+   A constructor whose message takes parameters rather than a record cannot be
+   called with a partial set: Bond.create wants a network and its members, and
+   omitting them does not fail politely. So an example for one has to supply
+   all of them, which means building the whole argument list rather than
+   picking a representative parameter. *)
+and help_all_arguments classname m =
+  let params = List.filter (fun p -> not (is_class p classname)) m.msg_params in
+  let setups, args =
+    List.fold_left
+      (fun (setups, args) p ->
+        let name = ocaml_class_to_csharp_property p.param_name in
+        match p.param_type with
+        | Ref cls ->
+            let var = sprintf "$%s" (ocaml_class_to_csharp_local_var cls) in
+            ( setups
+              @ [
+                  sprintf "PS> %s = Get-Xen%s | Select-Object -First 1" var
+                    (ocaml_class_to_csharp_class cls)
+                ]
+            , args @ [sprintf "-%s %s" name var]
+            )
+        | Set (Ref cls) ->
+            let var = sprintf "$%s" (ocaml_class_to_csharp_local_var cls) in
+            ( setups
+              @ [
+                  sprintf "PS> %s = Get-Xen%s | Select-Object -First 1" var
+                    (ocaml_class_to_csharp_class cls)
+                ]
+            , args @ [sprintf "-%s %s" name var]
+            )
+        | Enum _ as ty -> (
+          match enum_values_of_ty ty with
+          | v :: _ ->
+              (setups, args @ [sprintf "-%s %s" name v])
+          | [] ->
+              (setups, args @ [sprintf "-%s %s" name "$value"])
+        )
+        | ty ->
+            ( setups
+            , args
+              @ [
+                  sprintf "-%s %s" name
+                    (help_value_placeholder ~verb:"New" (obj_internal_type ty))
+                ]
+            )
+      )
+      ([], []) params
+  in
+  (* Dedupe the setup lines: two parameters of the same class share a variable. *)
+  let setups =
+    List.fold_left
+      (fun acc s ->
+        if List.mem s acc then
+          acc
+        else
+          acc @ [s]
+      )
+      [] setups
+  in
+  (setups, String.concat " " args, List.map (fun p -> p.param_name) params)
+
 and help_message_argument ?(verb = "Set") classname m =
   let typ = get_message_type m classname verb in
   let from_type () = (None, help_value_placeholder ~verb typ) in
@@ -1036,66 +1100,109 @@ and help_for_class obj =
                 else
                   m.msg_doc
               )
-              (* One example per parameter set, because the three ways of
-                 describing the new object are the thing a reader has to choose
-                 between and the syntax block alone does not say why you would
-                 pick one. *)
             ~examples:
-              (let fields = help_ctor_field_params obj m in
-               [
-                 help_example
-                   ~title:(sprintf "Create a %s from a table of fields" stem)
-                   (sprintf
-                      "PS> New-Xen%s -HashTable @{ name_label = \"Demo %s\" } \
-                       -PassThru"
-                      stem stem
-                   )
-                   (sprintf
-                      "The keys are the API's field names, so this form reads \
-                       the same for every class whatever fields it happens to \
-                       have. -PassThru returns the new %s."
-                      stem
-                   )
-               ]
-               @ ( match fields with
-                 | p :: _ ->
-                     [
-                       help_example
-                         ~title:(sprintf "Create a %s from parameters" stem)
-                         (sprintf "PS> New-Xen%s -%s %s -PassThru" stem
-                            p.hp_name
-                            (help_value_placeholder p.hp_type)
+              ( if is_real_constructor m then
+                  (* A record constructor builds the object from its writable
+                     fields, so the hashtable, the field parameters and an
+                     existing record are three real ways of describing it. *)
+                  [
+                    help_example
+                      ~title:(sprintf "Create a %s from a table of fields" stem)
+                      (sprintf
+                         "PS> New-Xen%s -HashTable @{ name_label = \"Demo %s\" \
+                          } -PassThru"
+                         stem stem
+                      )
+                      (sprintf
+                         "The keys are the API's field names, so this form \
+                          reads the same for every class whatever fields it \
+                          happens to have. -PassThru returns the new %s."
+                         stem
+                      )
+                  ]
+                  @ ( match help_ctor_field_params obj m with
+                    | p :: _ ->
+                        [
+                          help_example
+                            ~title:(sprintf "Create a %s from parameters" stem)
+                            (sprintf "PS> New-Xen%s -%s %s -PassThru" stem
+                               p.hp_name
+                               (help_value_placeholder p.hp_type)
+                            )
+                            (sprintf
+                               "The same thing with one parameter per field, \
+                                which is the form that tab-completes. Get-Help \
+                                New-Xen%s -Full lists them all."
+                               stem
+                            )
+                        ]
+                    | [] ->
+                        []
+                    )
+                  @
+                  if List.mem classname classes_with_records then
+                    [
+                      help_example
+                        ~title:(sprintf "Create a %s from an existing one" stem)
+                        (sprintf
+                           "PS> $record = Get-Xen%s | Select-Object -First 1\n\
+                            PS> New-Xen%s -Record $record -PassThru"
+                           stem stem
+                        )
+                        (sprintf
+                           "-Record takes a whole %s record, so an existing \
+                            object can be used as the template for a new one."
+                           stem
+                        )
+                    ]
+                  else
+                    []
+                else
+                  (* Anything else takes the parameters of its own create
+                     message, and takes all of them: Bond.create wants a
+                     network and its members, and a call without them does not
+                     fail politely. The -HashTable and -Record sets of these
+                     cmdlets cannot populate those parameters at all, so an
+                     example must not reach for them. *)
+                  let setups, args, _ = help_all_arguments classname m in
+                  let call = sprintf "PS> New-Xen%s %s -PassThru" stem args in
+                  let code = String.concat "\n" (setups @ [call]) in
+                  [
+                    help_example
+                      ~title:(sprintf "Create a %s" stem)
+                      code
+                      (sprintf
+                         "%s takes the arguments of the create call rather \
+                          than a record of fields, and needs all of them. \
+                          -PassThru returns the new %s."
+                         (sprintf "New-Xen%s" stem) stem
+                      )
+                  ; help_example
+                      ~title:(sprintf "Create a %s and wait for the task" stem)
+                      (String.concat "\n"
+                         (setups
+                         @ [
+                             sprintf
+                               "PS> New-Xen%s %s -Async -PassThru |\n\
+                               \    Wait-XenTask -ShowProgress"
+                               stem args
+                           ]
                          )
-                         (sprintf
-                            "The same thing with one parameter per field, \
-                             which is the form that tab-completes. Get-Help \
-                             New-Xen%s -Full lists them all."
-                            stem
+                      )
+                      "-Async hands the work to the server and returns the \
+                       Task that represents it, which pipes into Wait-XenTask."
+                  ; help_example ~title:"See what would be created"
+                      (String.concat "\n"
+                         (setups
+                         @ [sprintf "PS> New-Xen%s %s -WhatIf" stem args]
                          )
-                     ]
-                 | [] ->
-                     []
-                 )
-               @
-               (* Only the classes with a get_all_records message have a
-                  getter to take the template from. *)
-               if List.mem classname classes_with_records then
-                 [
-                   help_example
-                     ~title:(sprintf "Create a %s from an existing one" stem)
-                     (sprintf
-                        "PS> $record = Get-Xen%s | Select-Object -First 1\n\
-                         PS> New-Xen%s -Record $record -PassThru"
-                        stem stem
-                     )
-                     (sprintf
-                        "-Record takes a whole %s record, so an existing \
-                         object can be used as the template for a new one."
-                        stem
-                     )
-                 ]
-               else
-                 []
+                      )
+                      (sprintf
+                         "Reports what would be created without creating it. \
+                          Every cmdlet that changes the server takes -WhatIf \
+                          and -Confirm."
+                      )
+                  ]
               )
             ~parameters:
               (help_passthru ()
