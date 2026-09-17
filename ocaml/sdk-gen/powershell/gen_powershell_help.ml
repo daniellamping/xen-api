@@ -58,6 +58,37 @@ let curated_used = ref []
    without inventing anything: the list is already in best-first order. *)
 let help_take n l = List.filteri (fun i _ -> i < n) l
 
+(* A variable to hold an object of a class, safe to assign in a shell.
+   PowerShell reserves a handful of names - $host is read-only, and assigning
+   to it stops the example dead - so anything that collides takes a prefix. *)
+let help_var_for cls =
+  let name = ocaml_class_to_csharp_local_var cls in
+  let reserved =
+    [
+      "host"
+    ; "error"
+    ; "input"
+    ; "args"
+    ; "this"
+    ; "true"
+    ; "false"
+    ; "null"
+    ; "matches"
+    ; "pwd"
+    ; "home"
+    ; "pid"
+    ; "profile"
+    ; "sender"
+    ; "switch"
+    ; "foreach"
+    ; "psitem"
+    ]
+  in
+  if List.mem (String.lowercase_ascii name) reserved then
+    sprintf "$xen%s" (pascal_case name)
+  else
+    sprintf "$%s" name
+
 let rec gen_help () =
   let class_commands =
     List.concat_map help_for_class (List.filter generated classes)
@@ -610,7 +641,7 @@ and help_all_arguments classname m =
         let name = ocaml_class_to_csharp_property p.param_name in
         match p.param_type with
         | Ref cls ->
-            let var = sprintf "$%s" (ocaml_class_to_csharp_local_var cls) in
+            let var = help_var_for cls in
             ( setups
               @ [
                   sprintf "PS> %s = Get-Xen%s | Select-Object -First 1" var
@@ -619,7 +650,7 @@ and help_all_arguments classname m =
             , args @ [sprintf "-%s %s" name var]
             )
         | Set (Ref cls) ->
-            let var = sprintf "$%s" (ocaml_class_to_csharp_local_var cls) in
+            let var = help_var_for cls in
             ( setups
               @ [
                   sprintf "PS> %s = Get-Xen%s | Select-Object -First 1" var
@@ -663,7 +694,7 @@ and help_message_argument ?(verb = "Set") classname m =
   let from_type () = (None, help_value_placeholder ~verb typ) in
   match List.find_opt (fun p -> not (is_class p classname)) m.msg_params with
   | Some {param_type= Ref cls; _} ->
-      let var = sprintf "$%s" (ocaml_class_to_csharp_local_var cls) in
+      let var = help_var_for cls in
       ( Some
           (sprintf "PS> %s = Get-Xen%s | Select-Object -First 1" var
              (ocaml_class_to_csharp_class cls)
@@ -1177,32 +1208,43 @@ and help_for_class obj =
                           -PassThru returns the new %s."
                          (sprintf "New-Xen%s" stem) stem
                       )
-                  ; help_example
-                      ~title:(sprintf "Create a %s and wait for the task" stem)
-                      (String.concat "\n"
-                         (setups
-                         @ [
-                             sprintf
-                               "PS> New-Xen%s %s -Async -PassThru |\n\
-                               \    Wait-XenTask -ShowProgress"
-                               stem args
-                           ]
-                         )
-                      )
-                      "-Async hands the work to the server and returns the \
-                       Task that represents it, which pipes into Wait-XenTask."
-                  ; help_example ~title:"See what would be created"
-                      (String.concat "\n"
-                         (setups
-                         @ [sprintf "PS> New-Xen%s %s -WhatIf" stem args]
-                         )
-                      )
-                      (sprintf
-                         "Reports what would be created without creating it. \
-                          Every cmdlet that changes the server takes -WhatIf \
-                          and -Confirm."
-                      )
                   ]
+                  (* Only a message the server runs asynchronously has a task
+                     to wait for; New-XenTask and New-XenMessage do not, and
+                     the cmdlet has no -Async to offer. *)
+                  @ ( if m.msg_async then
+                        [
+                          help_example
+                            ~title:
+                              (sprintf "Create a %s and wait for the task" stem)
+                            (String.concat "\n"
+                               (setups
+                               @ [
+                                   sprintf
+                                     "PS> New-Xen%s %s -Async -PassThru |\n\
+                                     \    Wait-XenTask -ShowProgress"
+                                     stem args
+                                 ]
+                               )
+                            )
+                            "-Async hands the work to the server and returns \
+                             the Task that represents it, which pipes into \
+                             Wait-XenTask."
+                        ]
+                      else
+                        []
+                    )
+                  @ [
+                      help_example ~title:"See what would be created"
+                        (String.concat "\n"
+                           (setups
+                           @ [sprintf "PS> New-Xen%s %s -WhatIf" stem args]
+                           )
+                        )
+                        "Reports what would be created without creating it. \
+                         Every cmdlet that changes the server takes -WhatIf \
+                         and -Confirm."
+                    ]
               )
             ~parameters:
               (help_passthru ()
@@ -1343,22 +1385,14 @@ and help_for_class obj =
                 let already = call_for m in
                 List.map
                   (fun (code, how, why) ->
-                    (* The line that builds the argument is not repeated: the
-                       reader has it from the first example, and repeating a
-                       KeyValuePair construction three times buries the command
-                       the example is about. *)
-                    help_example code
+                    (* The line that builds the argument is repeated rather
+                       than referred back to. It costs a line, but an example
+                       that only runs if you have read the one above it is not
+                       an example; running these against a pool is what showed
+                       that up. *)
+                    help_example (with_setup m code)
                       ~title:(sprintf "%s %s" (title_for m) how)
-                      (sprintf "%s %s%s" (remark_for m) why
-                         ( match
-                             fst (help_message_argument ~verb classname m)
-                           with
-                         | Some _ ->
-                             " The value is built as in the first example."
-                         | None ->
-                             ""
-                         )
-                      )
+                      (sprintf "%s %s" (remark_for m) why)
                   )
                   (help_take wanted
                      (List.filter
