@@ -315,17 +315,319 @@ and help_http_actions () =
         ~shouldprocess:is_put ~outputs:["void"] ~examples ()
   )
 
-(* Connect-XenServer, Disconnect-XenServer, Get-XenSession, Wait-XenTask,
-   Receive-XenPoolPatch and Send-XenOemPatchStream are hand-written C# under
-   autogen/src, so the generator does not know their parameters. They are left
-   out of the help file on purpose: an entry that documented only their
-   synopsis would replace the reflected syntax with an empty one and lose every
-   parameter. Leaving them out keeps Get-Help falling back to reflection, which
-   still describes them accurately. ConvertTo-XenRef is generated here, so it
-   can be documented in full. *)
+(* The cmdlets that are not generated from the datamodel: hand-written C# under
+   autogen/src, plus ConvertTo-XenRef.
+
+   Their parameters are written out here by hand, and that is load-bearing
+   rather than lazy. MAML external help REPLACES the reflected help for a
+   cmdlet it names - it does not add to it - so an entry that lists nine of a
+   cmdlet's ten parameters does not leave the tenth undocumented, it removes
+   the tenth from Get-Help entirely.
+
+   These lists were taken from the [Parameter] attributes in autogen/src, and
+   verify-help.ps1 is what keeps them honest: it loads the built module and
+   compares every documented parameter against the compiled cmdlet - names,
+   aliases, pipeline binding, enum values - and reports any parameter the
+   assembly has that the help does not. That check cannot live in
+   test_gen_powershell, which never sees a compiled cmdlet; it runs against the
+   module, which is the only place the reflected metadata exists.
+
+   They were previously left out of the help file altogether, for exactly that
+   risk. The cost of leaving them out was worse: Connect-XenServer is the first
+   command anybody runs, and it was the one cmdlet in the module with no
+   examples at all. *)
 and help_handwritten () =
   [
-    help_command ~name:"ConvertTo-XenRef"
+    help_command ~name:"Connect-XenServer"
+      ~synopsis:"Connects to a XenServer host or pool."
+      ~description:
+        "Opens a session with a XenServer host and adds it to the set of \
+         connections the other cmdlets can use.\n\
+         Every other cmdlet needs a session. Use -SetDefaultSession so the \
+         rest of the module picks this connection up implicitly; otherwise \
+         pass the session to each cmdlet with -SessionOpaqueRef.\n\
+         Connecting to a member of a pool redirects to the pool coordinator, \
+         so the session covers the whole pool."
+      ~common:false
+      ~parameters:
+        [
+          help_param ~required:true ~position:"0" ~sets:["Url"] "Url"
+            "string[]"
+            "The URL of the server to connect to, for example \
+             https://myserver. More than one may be given, and a session is \
+             opened for each."
+        ; help_param ~required:true ~position:"0" ~sets:["ServerPort"]
+            ~aliases:["svr"] "Server" "string[]"
+            "The address of the server to connect to, as an alternative to \
+             -Url. More than one may be given."
+        ; help_param ~sets:["ServerPort"] "Port" "int"
+            "The port to connect on. Defaults to 443."
+        ; help_param ~pipeline:"true (ByValue, ByPropertyName)" ~aliases:["cred"]
+            "Creds" "PSCredential"
+            "The credentials to log in with, as returned by Get-Credential. \
+             Use this in preference to -UserName and -Password, which put the \
+             password in the command line and so into the session history."
+        ; help_param ~position:"1" ~aliases:["user"] "UserName" "string"
+            "The user to log in as."
+        ; help_param ~position:"2" ~aliases:["pwd"] "Password" "string"
+            "The password to log in with."
+        ; help_param "OpaqueRef" "string[]"
+            "The reference of a session that is already open on the server, \
+             to adopt instead of logging in again."
+        ; help_param "Originator" "string"
+            "The name this client reports to the server, which appears in the \
+             server's logs and audit trail."
+        ; help_param "UserAgent" "string"
+            "The user agent to send with requests to the server."
+        ; help_param ~switch:true "PassThru" "SwitchParameter"
+            "If set, the cmdlet returns the session it opened. By default the \
+             cmdlet does not generate any output."
+        ; help_param ~switch:true "NoWarnNewCertificates" "SwitchParameter"
+            "If set, no warning is issued when the server presents a \
+             certificate that has not been seen before."
+        ; help_param ~switch:true "NoWarnCertificates" "SwitchParameter"
+            "If set, no warning is issued for certificate validation failures."
+        ; help_param ~switch:true "SetDefaultSession" "SwitchParameter"
+            "If set, this session becomes the one the other cmdlets use when \
+             none is given explicitly."
+        ; help_param ~switch:true "Force" "SwitchParameter"
+            "If set, the cmdlet connects without prompting for confirmation."
+        ]
+      ~outputs:["Session"]
+      ~examples:
+        [
+          help_example ~title:"Connect and make it the default session"
+            "PS> $creds = Get-Credential\n\
+             PS> Connect-XenServer -Url https://myserver -Creds $creds \
+             -SetDefaultSession"
+            "Opens a session and makes it the one every other cmdlet uses, so \
+             nothing else has to name it. Get-Credential prompts without \
+             echoing, which keeps the password out of the command line and out \
+             of the session history."
+        ; help_example ~title:"Connect from a script"
+            "PS> $secret = Read-Host -AsSecureString \"Password\"\n\
+             PS> $creds = New-Object \
+             System.Management.Automation.PSCredential(\"root\", $secret)\n\
+             PS> Connect-XenServer -Url https://myserver -Creds $creds \
+             -SetDefaultSession"
+            "Where a script cannot prompt, build the credential itself. \
+             -UserName and -Password are accepted too, but they put the \
+             password in the command line."
+        ; help_example ~title:"Keep the session to pass explicitly"
+            "PS> $creds = Get-Credential\n\
+             PS> $session = Connect-XenServer -Url https://myserver -Creds \
+             $creds -PassThru\n\
+             PS> Get-XenVM -SessionOpaqueRef $session.opaque_ref"
+            "-PassThru returns the session. Naming it on each cmdlet is how to \
+             work with more than one server at a time."
+        ; help_example ~title:"Connect to several servers at once"
+            "PS> $creds = Get-Credential\n\
+             PS> Connect-XenServer -Url https://server1, https://server2 \
+             -Creds $creds"
+            "A session is opened for each, and Get-XenSession lists them."
+        ]
+      ()
+  ; help_command ~name:"Disconnect-XenServer"
+      ~synopsis:"Closes a session with a XenServer host."
+      ~description:
+        "Logs out of a XenServer session and removes it from the set of \
+         connections the other cmdlets can use.\n\
+         Sessions do not last forever, but they do not expire the moment a \
+         script ends either, so a long-running script that connects \
+         repeatedly should disconnect as well."
+      ~common:false
+      ~parameters:
+        [
+          help_param ~position:"0" ~pipeline:"true (ByValue)"
+            ~sets:["XenObject"] "Session" "Session"
+            "The session to close, as returned by Get-XenSession or by \
+             Connect-XenServer -PassThru."
+        ; help_param ~position:"0" ~pipeline:"true (ByPropertyName)"
+            ~sets:["Ref"] ~aliases:["opaque_ref"] "Ref" "XenRef[Session]"
+            "The opaque reference of the session to close."
+        ]
+      ~examples:
+        [
+          help_example ~title:"Disconnect every open session"
+            "PS> Get-XenSession | Disconnect-XenServer"
+            "Closes all the sessions this module holds, which is the usual way \
+             to tidy up at the end of a script."
+        ; help_example ~title:"Disconnect one server"
+            "PS> Get-XenSession -Url https://myserver | Disconnect-XenServer"
+            "Leaves any other connections open."
+        ; help_example ~title:"Disconnect a session held in a variable"
+            "PS> $session = Connect-XenServer -Url https://myserver -Creds \
+             (Get-Credential) -PassThru\n\
+             PS> Disconnect-XenServer -Session $session"
+            "The session returned by -PassThru can be closed directly."
+        ]
+      ()
+  ; help_command ~name:"Get-XenSession"
+      ~synopsis:"Gets the sessions this module has open."
+      ~description:
+        "Returns the XenServer sessions currently open, optionally narrowed to \
+         one server or user.\n\
+         This reports what this PowerShell session holds; it does not ask a \
+         server which sessions exist on it."
+      ~common:false
+      ~parameters:
+        [
+          help_param ~pipeline:"true (ByPropertyName)" ~sets:["Ref"]
+            ~aliases:["opaque_ref"] "Ref" "XenRef[Session]"
+            "The opaque reference of the session to return."
+        ; help_param ~required:true ~sets:["Url"] "Url" "string"
+            "Returns the sessions open with the server at this URL."
+        ; help_param ~required:true ~sets:["ServerPort"] ~aliases:["svr"]
+            "Server" "string"
+            "Returns the sessions open with the server at this address."
+        ; help_param ~sets:["ServerPort"] "Port" "int"
+            "The port the server was connected on. Defaults to 443."
+        ; help_param ~required:true ~sets:["UserName"] "UserName" "string"
+            "Returns the sessions opened by this user."
+        ]
+        (* Session[], not Session: the cmdlet declares an array OutputType, as
+           every Get-Xen<Class> does, and verify-help.ps1 compares the two. *)
+      ~outputs:["Session[]"]
+      ~examples:
+        [
+          help_example ~title:"List every open session"
+            "PS> Get-XenSession"
+            "Shows what this PowerShell session is connected to."
+        ; help_example ~title:"Find the session for one server"
+            "PS> Get-XenSession -Url https://myserver"
+            "Useful when several servers are connected at once and a cmdlet \
+             needs to be told which to act on."
+        ; help_example ~title:"Target a cmdlet at one connection"
+            "PS> $session = Get-XenSession -Url https://myserver\n\
+             PS> Get-XenVM -SessionOpaqueRef $session.opaque_ref"
+            "Every cmdlet takes -SessionOpaqueRef, which overrides the default \
+             session for that one call."
+        ]
+      ()
+  ; help_command ~name:"Wait-XenTask"
+      ~synopsis:"Waits for an asynchronous XenServer task to finish."
+      ~description:
+        "Blocks until the given task completes, then returns its result.\n\
+         Cmdlets run with -Async return a task straight away instead of \
+         waiting. Piping that task into this cmdlet is how to wait for the \
+         operation and collect what it produced; -ShowProgress draws a \
+         progress bar while it runs.\n\
+         If the task fails, this cmdlet raises the error the task carries."
+      ~parameters:
+        [
+          help_param ~switch:true "PassThru" "SwitchParameter"
+            "If set, the cmdlet returns the task's result. By default the \
+             cmdlet does not generate any output."
+        ; help_param ~required:true ~position:"0" ~pipeline:"true (ByValue)"
+            ~sets:["XenObject"] "Task" "Task" "The task to wait for."
+        ; help_param ~required:true ~position:"0"
+            ~pipeline:"true (ByPropertyName)" ~sets:["Ref"]
+            ~aliases:["opaque_ref"] "Ref" "XenRef[Task]"
+            "The opaque reference of the task to wait for."
+        ; help_param ~required:true ~position:"0"
+            ~pipeline:"true (ByPropertyName)" ~sets:["Uuid"] "Uuid" "Guid"
+            "The uuid of the task to wait for."
+        ; help_param ~required:true ~position:"0"
+            ~pipeline:"true (ByPropertyName)" ~sets:["Name"]
+            ~aliases:["name_label"] "Name" "string"
+            "The name of the task to wait for."
+        ; help_param ~switch:true "ShowProgress" "SwitchParameter"
+            "If set, a progress bar is shown while the task runs."
+        ; help_param "Min" "int"
+            "The percentage the progress bar starts at, for a task that is one \
+             step of a longer operation."
+        ; help_param "Max" "int"
+            "The percentage the progress bar finishes at, for a task that is \
+             one step of a longer operation."
+        ]
+      ~examples:
+        [
+          help_example ~title:"Wait for an asynchronous operation"
+            "PS> Get-XenVM -Name \"Demo VM\" | Invoke-XenVM -XenAction Start \
+             -Async -PassThru | Wait-XenTask -ShowProgress"
+            "This is the idiom for any long-running operation: -Async returns \
+             a task, and Wait-XenTask follows it to completion."
+        ; help_example ~title:"Collect what the task produced"
+            "PS> $task = Get-XenVM -Name \"Demo VM\" | Invoke-XenVM -XenAction \
+             Snapshot -Async -PassThru\n\
+             PS> $snapshot = $task | Wait-XenTask -PassThru"
+            "An operation that creates something returns it through the task, \
+             so -PassThru is what hands back the new object."
+        ; help_example ~title:"Wait for a task by reference"
+            "PS> Wait-XenTask -Ref \
+             OpaqueRef:f433bf7b-2b0c-5f53-7018-7d195addb3ca -ShowProgress"
+            "A task can be waited for by reference, uuid or name as well as by \
+             piping the object in."
+        ]
+      ()
+  ; help_command ~name:"Receive-XenPoolPatch"
+      ~synopsis:"Downloads a pool patch from a XenServer host."
+      ~description:
+        "Downloads the given pool patch from the server and writes it to a \
+         local file."
+      ~parameters:
+        ( [
+            help_param "DataCopiedDelegate" "HTTP.DataCopiedDelegate"
+              "A delegate called as data arrives, for reporting progress."
+          ; help_param ~pipeline:"true (ByPropertyName)" "Uuid" "string"
+              "The uuid of the pool patch to download."
+          ]
+        @ help_http_common_params ()
+        )
+      ~outputs:["void"]
+      ~examples:
+        [
+          help_example ~title:"Download a patch"
+            "PS> Receive-XenPoolPatch -XenHost \"myserver\" -Path \
+             \"C:\\download.dat\" -Uuid \
+             1871ac51-ce6b-efc3-7fd0-28bc65aa39ff"
+            "Writes the patch into the local file."
+        ; help_example ~title:"Set a timeout for the transfer"
+            "PS> Receive-XenPoolPatch -XenHost \"myserver\" -Path \
+             \"C:\\download.dat\" -Uuid \
+             1871ac51-ce6b-efc3-7fd0-28bc65aa39ff -TimeoutMs 600000"
+            "Gives the transfer ten minutes. The timeout covers the HTTP \
+             request, not the API call that set it up."
+        ; help_example ~title:"Use an existing session"
+            "PS> Receive-XenPoolPatch -XenHost \"myserver\" -Path \
+             \"C:\\download.dat\" -Uuid \
+             1871ac51-ce6b-efc3-7fd0-28bc65aa39ff -SessionOpaqueRef \
+             $session.opaque_ref"
+            "Runs against a session already opened with Connect-XenServer \
+             rather than the default one."
+        ]
+      ()
+  ; help_command ~name:"Send-XenOemPatchStream"
+      ~synopsis:"Uploads an OEM patch stream to a XenServer host."
+      ~description:
+        "Streams the given local file to the server as an OEM patch."
+      ~shouldprocess:true
+      ~parameters:
+        ( [
+            help_param "ProgressDelegate" "HTTP.UpdateProgressDelegate"
+              "A delegate called as the upload proceeds, for reporting \
+               progress."
+          ]
+        @ help_http_common_params ()
+        )
+      ~outputs:["void"]
+      ~examples:
+        [
+          help_example ~title:"Upload a patch stream"
+            "PS> Send-XenOemPatchStream -XenHost \"myserver\" -Path \
+             \"C:\\upload.dat\""
+            "Streams the local file to the server."
+        ; help_example ~title:"See what would happen first"
+            "PS> Send-XenOemPatchStream -XenHost \"myserver\" -Path \
+             \"C:\\upload.dat\" -WhatIf"
+            "-WhatIf reports the upload without performing it."
+        ; help_example ~title:"Set a timeout for the transfer"
+            "PS> Send-XenOemPatchStream -XenHost \"myserver\" -Path \
+             \"C:\\upload.dat\" -TimeoutMs 600000"
+            "Gives the transfer ten minutes."
+        ]
+      ()
+  ; help_command ~name:"ConvertTo-XenRef"
       ~synopsis:"Converts a XenServer object to an object reference."
       ~description:
         "Converts a XenServer object into the corresponding opaque reference \
