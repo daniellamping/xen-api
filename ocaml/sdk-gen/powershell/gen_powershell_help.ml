@@ -346,8 +346,11 @@ and help_handwritten () =
          Every other cmdlet needs a session. Use -SetDefaultSession so the \
          rest of the module picks this connection up implicitly; otherwise \
          pass the session to each cmdlet with -SessionOpaqueRef.\n\
-         Connecting to a member of a pool redirects to the pool coordinator, \
-         so the session covers the whole pool."
+         Only the pool coordinator accepts logins. Connecting to any other \
+         member of a pool fails with HOST_IS_SLAVE, and the coordinator's \
+         address is the second element of the error's ErrorDescription, so a \
+         script that may be pointed at any host in a pool has to catch that \
+         and connect again. The last example does this."
       ~common:false
       ~parameters:
         [
@@ -425,6 +428,29 @@ and help_handwritten () =
              PS> Connect-XenServer -Url https://server1, https://server2 \
              -Creds $creds"
             "A session is opened for each, and Get-XenSession lists them."
+        ; help_example
+            ~title:"Connect to a pool without knowing which host is the \
+                    coordinator"
+            "PS> $creds = Get-Credential\n\
+             PS> try {\n\
+            \      Connect-XenServer -Url https://myserver -Creds $creds \
+             -NoWarnCertificates -NoWarnNewCertificates -SetDefaultSession \
+             -PassThru\n\
+            \  }\n\
+            \  catch {\n\
+            \      $desc = $_.Exception.ErrorDescription\n\
+            \      if ($desc[0] -ne \"HOST_IS_SLAVE\") { throw }\n\
+            \      # $desc[1] is the coordinator's address\n\
+            \      Connect-XenServer -Url \"https://$($desc[1])\" -Creds \
+             $creds -NoWarnCertificates -NoWarnNewCertificates \
+             -SetDefaultSession -PassThru\n\
+            \  }"
+            "A pool member refuses the login rather than forwarding it, so a \
+             script given the address of whichever host answers has to retry \
+             against the coordinator itself. ErrorDescription[0] is the error \
+             code and ErrorDescription[1] is the coordinator's address. \
+             Re-throwing anything else matters: without that test this \
+             swallows a wrong password as readily as a wrong host."
         ]
       ()
   ; help_command ~name:"Disconnect-XenServer"
