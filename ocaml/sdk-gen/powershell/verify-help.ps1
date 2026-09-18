@@ -46,14 +46,14 @@ $ErrorActionPreference = "Stop"
 $manifest = Join-Path (Resolve-Path $ModulePath).Path "XenServerPSModule.psd1"
 Import-Module $manifest -ErrorAction Stop
 
-# The hand-written cmdlets under autogen/src are deliberately absent from the
-# help file, so Get-Help falls back to reflection for them and there is nothing
-# here to check.
-$handwritten = @(
-    "Connect-XenServer", "Disconnect-XenServer", "Get-XenSession",
-    "Wait-XenTask", "Receive-XenPoolPatch", "Send-XenOemPatchStream"
-)
-
+# Every cmdlet in the module is checked, the hand-written ones under
+# autogen/src included. Their help is written out by hand in
+# gen_powershell_help.ml rather than derived from the datamodel, which makes
+# them the entries most likely to drift: add a [Parameter] to
+# Connect-XenServer.cs and nothing else in the build will notice. This is what
+# notices - and an undocumented parameter there is not a gap in the help, it is
+# a parameter REMOVED from Get-Help, because external help replaces the
+# reflected metadata rather than adding to it.
 $problems = [System.Collections.Generic.List[string]]::new()
 $counts = [ordered]@{}
 function Note($key, $n = 1) { if (-not $counts[$key]) { $counts[$key] = 0 }; $counts[$key] += $n }
@@ -63,8 +63,7 @@ $asm = [AppDomain]::CurrentDomain.GetAssemblies() |
        Where-Object { $_.GetName().Name -eq "XenServerPowerShell" }
 $dynTypes = @($asm.GetTypes() | Where-Object { $_.Name -like "*DynamicParameters" })
 
-$cmdlets = Get-Command -Module XenServerPSModule |
-           Where-Object { $handwritten -notcontains $_.Name }
+$cmdlets = Get-Command -Module XenServerPSModule
 
 foreach ($c in $cmdlets) {
     $h = Get-Help $c.Name -Full
