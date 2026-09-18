@@ -407,10 +407,21 @@ and help_handwritten () =
              nothing else has to name it. Get-Credential prompts without \
              echoing, which keeps the password out of the command line and out \
              of the session history."
+        ; help_example ~title:"Connect as a domain user"
+            "PS> $creds = Get-Credential MYDOMAIN\\alice\n\
+             PS> Connect-XenServer -Url https://myserver -Creds $creds \
+             -SetDefaultSession"
+            "Prefer an Active Directory account to the local root account. \
+             root is the pool's superuser and bypasses role-based access \
+             control, so what it does is neither restricted nor attributable \
+             to a person; a domain account gets the roles it has been granted \
+             and appears as itself in the audit log. Either MYDOMAIN\\alice or \
+             alice@mydomain.com is accepted."
         ; help_example ~title:"Connect from a script"
             "PS> $secret = Read-Host -AsSecureString \"Password\"\n\
              PS> $creds = New-Object \
-             System.Management.Automation.PSCredential(\"root\", $secret)\n\
+             System.Management.Automation.PSCredential(\"MYDOMAIN\\alice\", \
+             $secret)\n\
              PS> Connect-XenServer -Url https://myserver -Creds $creds \
              -SetDefaultSession"
             "Where a script cannot prompt, build the credential itself. \
@@ -428,29 +439,40 @@ and help_handwritten () =
              PS> Connect-XenServer -Url https://server1, https://server2 \
              -Creds $creds"
             "A session is opened for each, and Get-XenSession lists them."
+        ; help_example ~title:"Connect without being asked about the \
+                               certificate"
+            "PS> $creds = Get-Credential MYDOMAIN\\alice\n\
+             PS> Connect-XenServer -Url https://myserver -Creds $creds \
+             -NoWarnCertificates -NoWarnNewCertificates -SetDefaultSession"
+            "A server presenting a certificate this client has not seen \
+             before, or one that does not validate, prompts for confirmation - \
+             which stalls an unattended script. These two switches answer the \
+             prompts instead. They suppress the warning rather than fix the \
+             cause, so a script that always sets them will not notice the day \
+             the certificate really is wrong."
         ; help_example
             ~title:"Connect to a pool without knowing which host is the \
                     coordinator"
-            "PS> $creds = Get-Credential\n\
+            "PS> $creds = Get-Credential MYDOMAIN\\alice\n\
              PS> try {\n\
             \      Connect-XenServer -Url https://myserver -Creds $creds \
-             -NoWarnCertificates -NoWarnNewCertificates -SetDefaultSession \
-             -PassThru\n\
+             -SetDefaultSession -PassThru\n\
             \  }\n\
             \  catch {\n\
             \      $desc = $_.Exception.ErrorDescription\n\
             \      if ($desc[0] -ne \"HOST_IS_SLAVE\") { throw }\n\
             \      # $desc[1] is the coordinator's address\n\
             \      Connect-XenServer -Url \"https://$($desc[1])\" -Creds \
-             $creds -NoWarnCertificates -NoWarnNewCertificates \
-             -SetDefaultSession -PassThru\n\
+             $creds -SetDefaultSession -PassThru\n\
             \  }"
             "A pool member refuses the login rather than forwarding it, so a \
              script given the address of whichever host answers has to retry \
              against the coordinator itself. ErrorDescription[0] is the error \
              code and ErrorDescription[1] is the coordinator's address. \
              Re-throwing anything else matters: without that test this \
-             swallows a wrong password as readily as a wrong host."
+             swallows a wrong password as readily as a wrong host. Nothing \
+             here is specific to certificates - add the switches from the \
+             previous example only if the prompts are also in the way."
         ]
       ()
   ; help_command ~name:"Disconnect-XenServer"
