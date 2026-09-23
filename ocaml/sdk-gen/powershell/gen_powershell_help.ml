@@ -35,21 +35,65 @@ let help_release_name code =
   | None ->
       code
 
-(* A sentence saying that this class, message or field is deprecated or gone,
-   and from which release.
+(* The release a reader is most likely to be pointing the SDK at: nile, which
+   release_order_full brands "XenServer 8".
 
-   One SDK serves every version of the product - XenServer 9, 8.4 and hosts
-   older than either - so a binding for something withdrawn years ago is not a
-   mistake to be cleaned up: a customer on an old host still needs it. What was
-   missing is any way for a reader to know. VMPP went in XenServer 6.2 and the
-   two metrics classes in 6.1, yet their cmdlets document themselves exactly
-   like live ones, so the first sign of trouble on a current host is
+   The displayed name is looked up rather than written out, the way
+   get_release_branding feeds it to the C# and Java generators. A hardcoded
+   product version would be the only one in any SDK generator, and it would let
+   this file disagree with the [Deprecated("...")] attribute gen_csharp_binding
+   emits for the very same release.
+
+   The code name itself is a literal only because datamodel_types.mli stops
+   exporting the rel_* values at rel_stockholm_psr: nile, nile-preview and
+   orinoco are defined in the .ml but are not in scope here. Widening a shared
+   interface is not help work, so the name is checked against
+   release_order_full instead, and a rename upstream fails this build rather
+   than quietly mislabelling every deprecated cmdlet. *)
+let rel_current = "nile"
+
+let () =
+  if
+    not
+      (List.exists (fun r -> r.code_name = Some rel_current) release_order_full)
+  then
+    failwith
+      (sprintf "gen_powershell_help: %S is not a release in release_order_full"
+         rel_current
+      )
+
+let current_release_name = help_release_name rel_current
+
+(* True for a release that shipped before the current one. compare_versions
+   orders code names by their position in release_order, and falls back to an
+   rpm-style comparison for the numbered releases. *)
+let released_before_current code = compare_versions code rel_current < 0
+
+(* The label and sentence marking a class, message or field a reader should
+   not be reaching for.
+
+   One SDK serves every version of the product - XenServer 9, XenServer 8 and
+   hosts older than either - so a binding for something withdrawn years ago is
+   not a mistake to be cleaned up: a customer on an old host still needs it.
+   What was missing is any way for a reader to know. VMPP went in XenServer 6.2
+   and the two metrics classes in 6.1, yet their cmdlets document themselves
+   exactly like live ones, so the first sign of trouble on a current host is
    MESSAGE_REMOVED from a call the help just recommended.
 
-   No generator in the SDK reads lifecycle today, which is why this says it in
-   the help rather than acting on it. Removing the cmdlet would break the users
-   it still serves. *)
-let help_lifecycle_note ~noun (lc : Lifecycle.t) =
+   Removed before the current release and deprecated both come out as
+   "Deprecated", because the distinction is one about the datamodel's history
+   rather than about anything the reader can act on: either way the answer is
+   do not use this. The sentence that follows the label still says which of the
+   two it was, and from which release, because that is what tells you whether
+   your host is old enough to have it. Something removed in a release later
+   than the current one is a different case - it does still work on the current
+   one - and is worded as such, though nothing in the datamodel is in that
+   position today.
+
+   No generator in the SDK acts on lifecycle, which is why this says it in the
+   help rather than dropping the cmdlet. Dropping it would break the users it
+   still serves. *)
+let help_deprecation ~noun (lc : Lifecycle.t) =
   let at change =
     List.fold_left
       (fun acc (c, release, doc) ->
@@ -68,20 +112,26 @@ let help_lifecycle_note ~noun (lc : Lifecycle.t) =
   in
   match lc.Lifecycle.state with
   | Lifecycle.Removed_s ->
-      let where, why =
+      let sentence =
         match at Lifecycle.Removed with
+        | Some (r, d) when released_before_current r ->
+            sprintf
+              "This %s was removed in %s%s and is not available on %s or \
+               later, where a server answers MESSAGE_REMOVED. It remains in \
+               the SDK so that it can still be used against an older host."
+              noun (help_release_name r) (because d) current_release_name
         | Some (r, d) ->
-            (sprintf " in %s" (help_release_name r), because d)
+            sprintf
+              "This %s was removed in %s%s. It still works on %s and earlier; \
+               a server that has removed it answers MESSAGE_REMOVED."
+              noun (help_release_name r) (because d) current_release_name
         | None ->
-            ("", "")
+            sprintf
+              "This %s has been removed. A server that has removed it answers \
+               MESSAGE_REMOVED."
+              noun
       in
-      Some
-        (sprintf
-           "This %s was removed%s%s. It is still part of the SDK so that it \
-            can be used against earlier hosts; a server that has removed it \
-            answers MESSAGE_REMOVED."
-           noun where why
-        )
+      Some (sprintf "DEPRECATED. %s" sentence)
   | Lifecycle.Deprecated_s ->
       let where, why =
         match at Lifecycle.Deprecated with
@@ -90,14 +140,21 @@ let help_lifecycle_note ~noun (lc : Lifecycle.t) =
         | None ->
             ("", "")
       in
-      Some (sprintf "This %s is deprecated%s%s." noun where why)
+      Some
+        (sprintf
+           "DEPRECATED. This %s has been deprecated%s%s. It still works on %s, \
+            but should not be used in new scripts."
+           noun where why current_release_name
+        )
   | _ ->
       None
 
-(* Append a lifecycle note to a description, if there is one to make. *)
+(* Put a deprecation note in front of a description rather than after it. A
+   reader who stops at the first sentence is exactly the reader who most needs
+   to be told, and Get-Help -Full prints the whole description either way. *)
 let help_note_onto description = function
   | Some note ->
-      sprintf "%s\n\n%s" description note
+      sprintf "%s\n\n%s" note description
   | None ->
       description
 
@@ -612,10 +669,23 @@ and help_handwritten () =
              piping the object in."
         ]
       ()
-  ; help_command ~name:"Receive-XenPoolPatch"
+  ; (* Neither this nor Send-XenOemPatchStream is reachable from the datamodel,
+       so neither carries lifecycle for help_deprecation to read: both are
+       hand-written cmdlets over HTTP actions that the C# SDK hardcodes in
+       HTTP_actions.mustache, outside the {{#http_actions}} loop. The server
+       stopped serving them long ago - /oem_patch_stream when its handler was
+       deleted in 2014 (CP-9401) and /pool_patch_download when the datamodel
+       definitions for both went in 2020 - so the note has to be written out
+       here or these two are the only dead cmdlets in the module that document
+       themselves as working. *)
+    help_command ~name:"Receive-XenPoolPatch" ~deprecated:true
       ~synopsis:"Downloads a pool patch from a XenServer host."
       ~description:
-        "Downloads the given pool patch from the server and writes it to a \
+        "DEPRECATED. The server no longer serves /pool_patch_download; its \
+         definition was removed from the datamodel in 2020 and a current \
+         server answers 404. The cmdlet remains in the SDK so that it can \
+         still be used against an older host.\n\n\
+         Downloads the given pool patch from the server and writes it to a \
          local file."
       ~parameters:
         ([
@@ -647,9 +717,14 @@ and help_handwritten () =
              rather than the default one."
         ]
       ()
-  ; help_command ~name:"Send-XenOemPatchStream"
+  ; help_command ~name:"Send-XenOemPatchStream" ~deprecated:true
       ~synopsis:"Uploads an OEM patch stream to a XenServer host."
-      ~description:"Streams the given local file to the server as an OEM patch."
+      ~description:
+        "DEPRECATED. The server no longer serves /oem_patch_stream; its \
+         handler was deleted in 2014 and a current server answers 404. The \
+         cmdlet remains in the SDK so that it can still be used against an \
+         older host.\n\n\
+         Streams the given local file to the server as an OEM patch."
       ~shouldprocess:true
       ~parameters:
         ([
@@ -1180,7 +1255,17 @@ and help_value_placeholder ?(verb = "Set") typ =
 
 and help_command ~name ~synopsis ~description ?(parameters = [])
     ?(common = true) ?(shouldprocess = false) ?async ?(outputs = [])
-    ?(examples = []) () =
+    ?(examples = []) ?(deprecated = false) () =
+  (* The synopsis is the one line that follows a cmdlet everywhere: Get-Command,
+     Get-Help with a wildcard, the module's own listing. A note in the
+     description is only read by someone who already opened the help, which is
+     not where a reader decides to use a cmdlet. *)
+  let synopsis =
+    if deprecated then
+      "[Deprecated] " ^ synopsis
+    else
+      synopsis
+  in
   let verb, noun =
     match String.index_opt name '-' with
     | Some i ->
@@ -1494,13 +1579,16 @@ and help_for_class obj =
   let messages = obj.messages in
   let stem = ocaml_class_to_csharp_class classname in
   (* A class-level note reaches every cmdlet of the class; a message-level one
-     is added on top where a cmdlet comes from one particular message. *)
-  let class_note = help_lifecycle_note ~noun:"class" obj.obj_lifecycle in
+     is added on top where a cmdlet comes from one particular message. The
+     paired predicates say whether the synopsis gets the label, and have to
+     agree with the notes or a cmdlet ends up flagged in one place and not the
+     other. *)
+  let class_note = help_deprecation ~noun:"class" obj.obj_lifecycle in
+  let msg_note m = help_deprecation ~noun:"operation" m.msg_lifecycle in
   let described d = help_note_onto d class_note in
-  let described_msg d m =
-    help_note_onto (described d)
-      (help_lifecycle_note ~noun:"operation" m.msg_lifecycle)
-  in
+  let described_msg d m = help_note_onto (described d) (msg_note m) in
+  let dep = class_note <> None in
+  let dep_msg m = dep || msg_note m <> None in
   let class_desc =
     described
       ( if obj.description = "" then
@@ -1536,7 +1624,7 @@ and help_for_class obj =
              )
       in
       [
-        help_command ~name:(sprintf "Get-Xen%s" stem)
+        help_command ~name:(sprintf "Get-Xen%s" stem) ~deprecated:dep
           ~synopsis:(sprintf "Gets the %s objects present on the server." stem)
           ~description:class_desc
           ~parameters:
@@ -1553,7 +1641,7 @@ and help_for_class obj =
     match List.filter is_constructor messages with
     | m :: _ ->
         [
-          help_command ~name:(sprintf "New-Xen%s" stem)
+          help_command ~name:(sprintf "New-Xen%s" stem) ~deprecated:(dep_msg m)
             ~synopsis:(sprintf "Creates a new %s object." stem)
             ~description:
               (described_msg
@@ -1839,7 +1927,7 @@ and help_for_class obj =
         [
           help_command
             ~name:(sprintf "%s-Xen%s%s" verb stem suffix)
-            ~synopsis ~description:(described descr) ~examples
+            ~deprecated:dep ~synopsis ~description:(described descr) ~examples
             ~parameters:
               (help_identity_params obj classname ~mandatory_ref:true
                  ~include_xenobject:true ~include_uuid_name:true
@@ -2115,7 +2203,7 @@ and help_for_class obj =
         [
           help_command
             ~name:(sprintf "%s-Xen%s%s" verb stem suffix)
-            ~synopsis ~description ~examples
+            ~deprecated:dep ~synopsis ~description ~examples
             ~parameters:
               (help_identity_params obj classname ~mandatory_ref:true
                  ~include_xenobject:true ~include_uuid_name:(verb = "Invoke")
@@ -2176,6 +2264,7 @@ and help_for_class obj =
         [
           help_command
             ~name:(sprintf "Remove-Xen%s" stem)
+            ~deprecated:(dep_msg m)
             ~synopsis:(sprintf "Deletes a %s object." stem)
             ~description:
               (described_msg
