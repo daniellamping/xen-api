@@ -29,9 +29,7 @@ module DU = Datamodel_utils
    6.2". Numbered releases carry their own code_name ("23.24.0"), so one lookup
    serves both. Falls back to the raw name rather than inventing one. *)
 let help_release_name code =
-  match
-    List.find_opt (fun r -> r.code_name = Some code) release_order_full
-  with
+  match List.find_opt (fun r -> r.code_name = Some code) release_order_full with
   | Some r ->
       r.branding
   | None ->
@@ -55,11 +53,19 @@ let help_lifecycle_note ~noun (lc : Lifecycle.t) =
   let at change =
     List.fold_left
       (fun acc (c, release, doc) ->
-        if c = change then Some (release, doc) else acc
+        if c = change then
+          Some (release, doc)
+        else
+          acc
       )
       None lc.Lifecycle.transitions
   in
-  let because doc = if doc = "" then "" else sprintf " (%s)" doc in
+  let because doc =
+    if doc = "" then
+      ""
+    else
+      sprintf " (%s)" doc
+  in
   match lc.Lifecycle.state with
   | Lifecycle.Removed_s ->
       let where, why =
@@ -354,8 +360,7 @@ and help_handwritten () =
       ~common:false
       ~parameters:
         [
-          help_param ~required:true ~position:"0" ~sets:["Url"] "Url"
-            "string[]"
+          help_param ~required:true ~position:"0" ~sets:["Url"] "Url" "string[]"
             "The URL of the server to connect to, for example \
              https://myserver. More than one may be given, and a session is \
              opened for each."
@@ -365,8 +370,8 @@ and help_handwritten () =
              -Url. More than one may be given."
         ; help_param ~sets:["ServerPort"] "Port" "int"
             "The port to connect on. Defaults to 443."
-        ; help_param ~pipeline:"true (ByValue, ByPropertyName)" ~aliases:["cred"]
-            "Creds" "PSCredential"
+        ; help_param ~pipeline:"true (ByValue, ByPropertyName)"
+            ~aliases:["cred"] "Creds" "PSCredential"
             "The credentials to log in with, as returned by Get-Credential. \
              Use this in preference to -UserName and -Password, which put the \
              password in the command line and so into the session history."
@@ -375,8 +380,8 @@ and help_handwritten () =
         ; help_param ~position:"2" ~aliases:["pwd"] "Password" "string"
             "The password to log in with."
         ; help_param "OpaqueRef" "string[]"
-            "The reference of a session that is already open on the server, \
-             to adopt instead of logging in again."
+            "The reference of a session that is already open on the server, to \
+             adopt instead of logging in again."
         ; help_param "Originator" "string"
             "The name this client reports to the server, which appears in the \
              server's logs and audit trail."
@@ -439,8 +444,8 @@ and help_handwritten () =
              PS> Connect-XenServer -Url https://server1, https://server2 \
              -Creds $creds"
             "A session is opened for each, and Get-XenSession lists them."
-        ; help_example ~title:"Connect without being asked about the \
-                               certificate"
+        ; help_example
+            ~title:"Connect without being asked about the certificate"
             "PS> $creds = Get-Credential MYDOMAIN\\alice\n\
              PS> Connect-XenServer -Url https://myserver -Creds $creds \
              -NoWarnCertificates -NoWarnNewCertificates -SetDefaultSession"
@@ -451,8 +456,8 @@ and help_handwritten () =
              cause, so a script that always sets them will not notice the day \
              the certificate really is wrong."
         ; help_example
-            ~title:"Connect to a pool without knowing which host is the \
-                    coordinator"
+            ~title:
+              "Connect to a pool without knowing which host is the coordinator"
             "PS> $creds = Get-Credential MYDOMAIN\\alice\n\
              PS> try {\n\
             \      Connect-XenServer -Url https://myserver -Creds $creds \
@@ -481,8 +486,8 @@ and help_handwritten () =
         "Logs out of a XenServer session and removes it from the set of \
          connections the other cmdlets can use.\n\
          Sessions do not last forever, but they do not expire the moment a \
-         script ends either, so a long-running script that connects \
-         repeatedly should disconnect as well."
+         script ends either, so a long-running script that connects repeatedly \
+         should disconnect as well."
       ~common:false
       ~parameters:
         [
@@ -538,8 +543,7 @@ and help_handwritten () =
       ~outputs:["Session[]"]
       ~examples:
         [
-          help_example ~title:"List every open session"
-            "PS> Get-XenSession"
+          help_example ~title:"List every open session" "PS> Get-XenSession"
             "Shows what this PowerShell session is connected to."
         ; help_example ~title:"Find the session for one server"
             "PS> Get-XenSession -Url https://myserver"
@@ -614,12 +618,12 @@ and help_handwritten () =
         "Downloads the given pool patch from the server and writes it to a \
          local file."
       ~parameters:
-        ( [
-            help_param "DataCopiedDelegate" "HTTP.DataCopiedDelegate"
-              "A delegate called as data arrives, for reporting progress."
-          ; help_param ~pipeline:"true (ByPropertyName)" "Uuid" "string"
-              "The uuid of the pool patch to download."
-          ]
+        ([
+           help_param "DataCopiedDelegate" "HTTP.DataCopiedDelegate"
+             "A delegate called as data arrives, for reporting progress."
+         ; help_param ~pipeline:"true (ByPropertyName)" "Uuid" "string"
+             "The uuid of the pool patch to download."
+         ]
         @ help_http_common_params ()
         )
       ~outputs:["void"]
@@ -627,35 +631,31 @@ and help_handwritten () =
         [
           help_example ~title:"Download a patch"
             "PS> Receive-XenPoolPatch -XenHost \"myserver\" -Path \
-             \"C:\\download.dat\" -Uuid \
-             1871ac51-ce6b-efc3-7fd0-28bc65aa39ff"
+             \"C:\\download.dat\" -Uuid 1871ac51-ce6b-efc3-7fd0-28bc65aa39ff"
             "Writes the patch into the local file."
         ; help_example ~title:"Set a timeout for the transfer"
             "PS> Receive-XenPoolPatch -XenHost \"myserver\" -Path \
-             \"C:\\download.dat\" -Uuid \
-             1871ac51-ce6b-efc3-7fd0-28bc65aa39ff -TimeoutMs 600000"
+             \"C:\\download.dat\" -Uuid 1871ac51-ce6b-efc3-7fd0-28bc65aa39ff \
+             -TimeoutMs 600000"
             "Gives the transfer ten minutes. The timeout covers the HTTP \
              request, not the API call that set it up."
         ; help_example ~title:"Use an existing session"
             "PS> Receive-XenPoolPatch -XenHost \"myserver\" -Path \
-             \"C:\\download.dat\" -Uuid \
-             1871ac51-ce6b-efc3-7fd0-28bc65aa39ff -SessionOpaqueRef \
-             $session.opaque_ref"
+             \"C:\\download.dat\" -Uuid 1871ac51-ce6b-efc3-7fd0-28bc65aa39ff \
+             -SessionOpaqueRef $session.opaque_ref"
             "Runs against a session already opened with Connect-XenServer \
              rather than the default one."
         ]
       ()
   ; help_command ~name:"Send-XenOemPatchStream"
       ~synopsis:"Uploads an OEM patch stream to a XenServer host."
-      ~description:
-        "Streams the given local file to the server as an OEM patch."
+      ~description:"Streams the given local file to the server as an OEM patch."
       ~shouldprocess:true
       ~parameters:
-        ( [
-            help_param "ProgressDelegate" "HTTP.UpdateProgressDelegate"
-              "A delegate called as the upload proceeds, for reporting \
-               progress."
-          ]
+        ([
+           help_param "ProgressDelegate" "HTTP.UpdateProgressDelegate"
+             "A delegate called as the upload proceeds, for reporting progress."
+         ]
         @ help_http_common_params ()
         )
       ~outputs:["void"]
@@ -1990,7 +1990,10 @@ and help_for_class obj =
             && match List.assoc_opt n named with Some r -> r | None -> false
         in
         let collect name code =
-          if returns_a_value name then code ^ " -PassThru" else code
+          if returns_a_value name then
+            code ^ " -PassThru"
+          else
+            code
         in
         let collected name why =
           if returns_a_value name then
@@ -2014,7 +2017,8 @@ and help_for_class obj =
                )
             )
             ( if verb = "Invoke" then
-                collected name (sprintf "Invokes the %s operation on a %s." name stem)
+                collected name
+                  (sprintf "Invokes the %s operation on a %s." name stem)
               else
                 sprintf "Gets the %s property of a %s." name stem
             )
