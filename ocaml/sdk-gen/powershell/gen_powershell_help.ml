@@ -182,6 +182,59 @@ let help_article name =
 
 let help_a name = sprintf "%s %s" (help_article name) name
 
+(* "-Name, -Uuid or -Ref" *)
+let rec help_or = function
+  | [] ->
+      ""
+  | [x] ->
+      x
+  | [x; y] ->
+      sprintf "%s or %s" x y
+  | x :: rest ->
+      sprintf "%s, %s" x (help_or rest)
+
+(* Datamodel doc strings are mostly written as labels - "A physical host",
+   "Destroy an interface bond" - so they can start in lower case and stop
+   without a full stop. *)
+let help_sentence s =
+  let s = String.trim s in
+  if s = "" then
+    s
+  else
+    let s = String.capitalize_ascii s in
+    match s.[String.length s - 1] with '.' | '!' | '?' -> s | _ -> s ^ "."
+
+(* A datamodel doc string as a paragraph of its own, labelled with what it
+   documents, the way the Invoke and Get-*Property cmdlets already list their
+   actions and properties. The label is what lets a noun phrase or an
+   imperative stand as a sentence: folding the string into the prose around it
+   would need every one of them to have the same grammatical shape, and they do
+   not ("A physical host", "Describes the vusb device", "Pool-wide
+   information"). *)
+let help_definition label doc =
+  match String.trim doc with
+  | "" ->
+      []
+  | d ->
+      [sprintf "%s: %s" label (help_sentence d)]
+
+(* The doc string of the message a cmdlet calls, labelled with the call. Where
+   nobody documented the message the datamodel fills in a stock sentence
+   ("Create a new VDI instance, and return its handle."), which says nothing the
+   cmdlet's own first sentence has not, so that is left out. *)
+let help_call_doc obj m =
+  let stock =
+    match List.assoc_opt m.msg_name DU.default_doccomments with
+    | Some doc ->
+        doc obj = m.msg_doc
+    | None ->
+        false
+  in
+  if stock then
+    []
+  else
+    help_definition (sprintf "%s.%s" obj.name m.msg_name) m.msg_doc
+
 (* A parameter as it appears in the generated Get-Help content. [hp_sets] holds
    the names of the cmdlet parameter sets the parameter belongs to; an empty
    list means it belongs to all of them, which is how the generated cmdlets
@@ -1613,13 +1666,15 @@ and help_for_class obj =
   let described_msg d m = help_note_onto (described d) (msg_note m) in
   let dep = class_note <> None in
   let dep_msg m = dep || msg_note m <> None in
-  let class_desc =
-    described
-      ( if obj.description = "" then
-          sprintf "The %s class." stem
-        else
-          obj.description
-      )
+  (* What the class is, for the cmdlets whose own job says little about it. *)
+  let class_definition = help_definition stem obj.description in
+  (* A cmdlet that calls one message: what it does, then the call's own doc,
+     which is kept because it is where the conditions and side effects live
+     ("can only be called when the VM is in the Halted State"). *)
+  let described_call lead m =
+    described_msg
+      (String.concat "\n" ((lead :: help_call_doc obj m) @ class_definition))
+      m
   in
   let getter =
     if List.mem classname classes_with_records then
@@ -1653,7 +1708,32 @@ and help_for_class obj =
            objects of every host. A standalone host is a pool of one. *)
         help_command ~name:(sprintf "Get-Xen%s" stem) ~deprecated:dep
           ~synopsis:(sprintf "Gets the %s objects in the pool." stem)
-          ~description:class_desc
+          ~description:
+            (described
+               (String.concat "\n"
+                  (sprintf
+                     "Retrieves the %s objects in the pool. With no parameters \
+                      the cmdlet returns the whole collection; use %s to \
+                      select one."
+                     stem
+                     (help_or
+                        (( if has_name obj then
+                             ["-Name"]
+                           else
+                             []
+                         )
+                        @ ( if has_uuid obj then
+                              ["-Uuid"]
+                            else
+                              []
+                          )
+                        @ ["-Ref"]
+                        )
+                     )
+                  :: class_definition
+                  )
+               )
+            )
           ~parameters:
             (help_identity_params obj classname ~mandatory_ref:false
                ~include_xenobject:false ~include_uuid_name:true
@@ -1671,14 +1751,7 @@ and help_for_class obj =
           help_command ~name:(sprintf "New-Xen%s" stem) ~deprecated:(dep_msg m)
             ~synopsis:(sprintf "Creates a new %s object." stem)
             ~description:
-              (described_msg
-                 ( if m.msg_doc = "" then
-                     sprintf "Creates a new %s." stem
-                   else
-                     m.msg_doc
-                 )
-                 m
-              )
+              (described_call (sprintf "Creates a new %s object." stem) m)
             ~examples:
               ( if is_real_constructor m then
                   (* A record constructor builds the object from its writable
@@ -2045,7 +2118,7 @@ and help_for_class obj =
               in
               sprintf "%s: %s%s"
                 (cut_msg_name (pascal_case m.msg_name) verb)
-                m.msg_doc tag
+                (help_sentence m.msg_doc) tag
             )
             ms
         in
@@ -2302,12 +2375,8 @@ and help_for_class obj =
             ~deprecated:(dep_msg m)
             ~synopsis:(sprintf "Deletes %s object." (help_a stem))
             ~description:
-              (described_msg
-                 ( if m.msg_doc = "" then
-                     sprintf "Destroys the specified %s object." stem
-                   else
-                     m.msg_doc
-                 )
+              (described_call
+                 (sprintf "Deletes the specified %s object." stem)
                  m
               )
             ~parameters:
