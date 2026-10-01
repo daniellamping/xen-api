@@ -1628,7 +1628,7 @@ and help_for_class obj =
           ~title:(sprintf "List every %s" stem)
           (sprintf "PS> Get-Xen%s" stem)
           (sprintf
-             "Retrieves all %s objects from the server. With no parameters the \
+             "Retrieves every %s object in the pool. With no parameters the \
               cmdlet fetches the whole collection."
              stem
           )
@@ -1648,8 +1648,11 @@ and help_for_class obj =
              )
       in
       [
+        (* The pool, not the server: get_all_records reads the pool's shared
+           database, so connected to one host the getter still returns the
+           objects of every host. A standalone host is a pool of one. *)
         help_command ~name:(sprintf "Get-Xen%s" stem) ~deprecated:dep
-          ~synopsis:(sprintf "Gets the %s objects present on the server." stem)
+          ~synopsis:(sprintf "Gets the %s objects in the pool." stem)
           ~description:class_desc
           ~parameters:
             (help_identity_params obj classname ~mandatory_ref:false
