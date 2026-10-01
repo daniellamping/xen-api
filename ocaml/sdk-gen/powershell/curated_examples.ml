@@ -173,7 +173,7 @@ PS> Get-XenVM -Name "web-01" | Set-XenVM -Groups $group|}
     )
   ; ( "Get-XenVBD"
     , [
-        ( "List a VM.s disks, excluding the CD drive"
+        ( "List a VM's disks, excluding the CD drive"
         , {|PS> $vm = Get-XenVM -Name "web-01"
 PS> $vm.VBDs |
     ForEach-Object { Get-XenVBD -Ref $_ } |
