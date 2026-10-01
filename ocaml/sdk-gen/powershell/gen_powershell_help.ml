@@ -158,6 +158,30 @@ let help_note_onto description = function
   | None ->
       description
 
+(* The indefinite article for a class or field name as it is read aloud. Names
+   that open with an initialism take the article of the first letter's name (an
+   SR, an SDNController, a VM); anything else goes by its first letter, except
+   that every name in the API starting with "u" reads it as "you" (a User, a
+   USBGroup). *)
+let help_article name =
+  let is_upper c = 'A' <= c && c <= 'Z' in
+  let initialism =
+    String.length name > 1 && is_upper name.[0] && is_upper name.[1]
+  in
+  if name = "" then
+    "a"
+  else
+    match Char.uppercase_ascii name.[0] with
+    | ('A' | 'E' | 'F' | 'H' | 'I' | 'L' | 'M' | 'N' | 'O' | 'R' | 'S' | 'X')
+      when initialism ->
+        "an"
+    | ('A' | 'E' | 'I' | 'O') when not initialism ->
+        "an"
+    | _ ->
+        "a"
+
+let help_a name = sprintf "%s %s" (help_article name) name
+
 (* A parameter as it appears in the generated Get-Help content. [hp_sets] holds
    the names of the cmdlet parameter sets the parameter belongs to; an empty
    list means it belongs to all of them, which is how the generated cmdlets
@@ -1659,7 +1683,9 @@ and help_for_class obj =
                      existing record are three real ways of describing it. *)
                   [
                     help_example
-                      ~title:(sprintf "Create a %s from a table of fields" stem)
+                      ~title:
+                        (sprintf "Create %s from a table of fields" (help_a stem)
+                        )
                       (sprintf
                          "PS> New-Xen%s -HashTable @{ name_label = \"Demo %s\" \
                           } -PassThru"
@@ -1676,7 +1702,8 @@ and help_for_class obj =
                     | p :: _ ->
                         [
                           help_example
-                            ~title:(sprintf "Create a %s from parameters" stem)
+                            ~title:
+                              (sprintf "Create %s from parameters" (help_a stem))
                             (sprintf "PS> New-Xen%s -%s %s -PassThru" stem
                                p.hp_name
                                (help_value_placeholder p.hp_type)
@@ -1695,7 +1722,9 @@ and help_for_class obj =
                   if List.mem classname classes_with_records then
                     [
                       help_example
-                        ~title:(sprintf "Create a %s from an existing one" stem)
+                        ~title:
+                          (sprintf "Create %s from an existing one" (help_a stem)
+                          )
                         (sprintf
                            "PS> $record = Get-Xen%s | Select-Object -First 1\n\
                             PS> New-Xen%s -Record $record -PassThru"
@@ -1721,7 +1750,7 @@ and help_for_class obj =
                   let code = String.concat "\n" (setups @ [call]) in
                   [
                     help_example
-                      ~title:(sprintf "Create a %s" stem)
+                      ~title:(sprintf "Create %s" (help_a stem))
                       code
                       (sprintf
                          "%s takes the arguments of the create call rather \
@@ -1737,7 +1766,9 @@ and help_for_class obj =
                         [
                           help_example
                             ~title:
-                              (sprintf "Create a %s and wait for the task" stem)
+                              (sprintf "Create %s and wait for the task"
+                                 (help_a stem)
+                              )
                             (String.concat "\n"
                                (setups
                                @ [
@@ -1841,11 +1872,11 @@ and help_for_class obj =
               )
               field
           else
-            sprintf "%s a %s" verb (String.lowercase_ascii field)
+            sprintf "%s %s" verb (help_a (String.lowercase_ascii field))
         in
         let remark_for m =
           if is_field_op m then
-            sprintf "%s the %s field of a %s.%s"
+            sprintf "%s the %s field of %s.%s"
               ( match verb with
               | "Set" ->
                   "Sets"
@@ -1854,7 +1885,7 @@ and help_for_class obj =
               | _ ->
                   "Removes a value from"
               )
-              (field_of m) stem
+              (field_of m) (help_a stem)
               ( if
                   String.starts_with ~prefix:"KeyValuePair"
                     (get_message_type m classname verb)
@@ -1959,32 +1990,32 @@ and help_for_class obj =
   in
   let setter =
     msg_family "Set" "" ~void_output:true
-      (sprintf "Sets fields of a %s object." stem)
+      (sprintf "Sets fields of %s object." (help_a stem))
       (sprintf
-         "Changes writable fields of a %s. Each optional parameter listed \
-          below corresponds to a field that can be set."
-         stem
+         "Changes writable fields of %s. Each optional parameter listed below \
+          corresponds to a field that can be set."
+         (help_a stem)
       )
       (List.filter is_setter messages)
   in
   let adder =
     msg_family "Add" "" ~void_output:true
-      (sprintf "Adds to fields of a %s object." stem)
+      (sprintf "Adds to fields of %s object." (help_a stem))
       (sprintf
-         "Adds values to the collection-valued fields of a %s. Each optional \
+         "Adds values to the collection-valued fields of %s. Each optional \
           parameter listed below corresponds to a field that can be added to."
-         stem
+         (help_a stem)
       )
       (List.filter is_adder messages)
   in
   let remover =
     msg_family "Remove" "Property" ~void_output:false
-      (sprintf "Removes values from fields of a %s object." stem)
+      (sprintf "Removes values from fields of %s object." (help_a stem))
       (sprintf
-         "Removes values from the collection-valued fields of a %s. Each \
+         "Removes values from the collection-valued fields of %s. Each \
           optional parameter listed below corresponds to a field that can be \
           removed from."
-         stem
+         (help_a stem)
       )
       (List.filter is_remover messages)
   in
@@ -2106,9 +2137,9 @@ and help_for_class obj =
             )
             ( if verb = "Invoke" then
                 collected name
-                  (sprintf "Invokes the %s operation on a %s." name stem)
+                  (sprintf "Invokes the %s operation on %s." name (help_a stem))
               else
-                sprintf "Gets the %s property of a %s." name stem
+                sprintf "Gets the %s property of %s." name (help_a stem)
             )
         in
         (* Three examples on a property getter, which is enough to show that
@@ -2156,11 +2187,12 @@ and help_for_class obj =
                       (collect n code)
                       ( if verb = "Invoke" then
                           collected n
-                            (sprintf "Invokes the %s operation on a %s. %s" n
-                               stem why
+                            (sprintf "Invokes the %s operation on %s. %s" n
+                               (help_a stem) why
                             )
                         else
-                          sprintf "Gets the %s property of a %s. %s" n stem why
+                          sprintf "Gets the %s property of %s. %s" n
+                            (help_a stem) why
                       )
                   )
                   (* Drop whichever way the first example already used, rather
@@ -2240,21 +2272,21 @@ and help_for_class obj =
   in
   let getprop =
     enum_family "Get" "Property" "Property"
-      (sprintf "Gets a property of a %s object." stem)
+      (sprintf "Gets a property of %s object." (help_a stem))
       (sprintf
-         "Gets a specified property of a %s object. Use the -XenProperty \
+         "Gets a specified property of %s object. Use the -XenProperty \
           parameter to select which property to retrieve."
-         stem
+         (help_a stem)
       )
       (List.filter is_getter messages)
   in
   let invoke =
     enum_family "Invoke" "" "Action"
-      (sprintf "Invokes an operation on a %s object." stem)
+      (sprintf "Invokes an operation on %s object." (help_a stem))
       (sprintf
-         "Invokes an operation on a %s object. Use the -XenAction parameter to \
+         "Invokes an operation on %s object. Use the -XenAction parameter to \
           select which operation to perform."
-         stem
+         (help_a stem)
       )
       (List.filter is_invoke messages)
   in
@@ -2265,7 +2297,7 @@ and help_for_class obj =
           help_command
             ~name:(sprintf "Remove-Xen%s" stem)
             ~deprecated:(dep_msg m)
-            ~synopsis:(sprintf "Deletes a %s object." stem)
+            ~synopsis:(sprintf "Deletes %s object." (help_a stem))
             ~description:
               (described_msg
                  ( if m.msg_doc = "" then
@@ -2285,9 +2317,9 @@ and help_for_class obj =
                List.map
                  (fun (code, how, why) ->
                    help_example
-                     ~title:(sprintf "Delete a %s %s" stem how)
+                     ~title:(sprintf "Delete %s %s" (help_a stem) how)
                      code
-                     (sprintf "Deletes a %s. %s" stem why)
+                     (sprintf "Deletes %s. %s" (help_a stem) why)
                  )
                  (help_take 2 (help_ways_to_name obj classname cmd))
                (* -WhatIf earns its place on a cmdlet that deletes: it is how
