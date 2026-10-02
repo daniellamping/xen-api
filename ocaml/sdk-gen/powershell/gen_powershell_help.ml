@@ -1729,7 +1729,15 @@ and help_message_params classname verb messages =
    labelled with the actions it belongs to. They are deliberately left out of
    the syntax blocks: a cmdlet like Invoke-XenVM has dozens of them across its
    actions, and listing them all in one syntax line would be unreadable. *)
-and help_dynamic_params classname verb enum_param messages =
+and help_dynamic_params obj classname verb enum_param messages =
+  (* A parameter that copies one of the class's fields - PIF.db_introduce
+     takes the whole PIF record, field by field - is often left undocumented
+     because the field already is, so fall back to the field's description. *)
+  let field_doc name =
+    DU.fields_of_obj obj
+    |> List.find_opt (fun f -> full_name f = name)
+    |> Option.fold ~none:"" ~some:(fun f -> f.field_description)
+  in
   let entries =
     List.concat_map
       (fun m ->
@@ -1754,7 +1762,11 @@ and help_dynamic_params classname verb enum_param messages =
               in
               ( pname
               , obj_internal_type p.param_type
-              , p.param_doc
+              , ( if p.param_doc = "" then
+                    field_doc p.param_name
+                  else
+                    p.param_doc
+                )
               , action
               , enum_values_of_ty p.param_type
               )
@@ -2526,7 +2538,7 @@ and help_for_class obj =
                        (String.lowercase_ascii enum_param)
                     )
                 ]
-              @ help_dynamic_params classname verb enum_param ms
+              @ help_dynamic_params obj classname verb enum_param ms
               @
               if verb = "Invoke" then
                 [help_passthru ()]
