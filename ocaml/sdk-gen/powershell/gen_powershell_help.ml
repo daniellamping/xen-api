@@ -1707,15 +1707,45 @@ and help_for_class obj =
   in
   let getter =
     if List.mem classname classes_with_records then
-      let ex =
-        help_example
-          ~title:(sprintf "List every %s" stem)
-          (sprintf "PS> Get-Xen%s" stem)
-          (sprintf
-             "Retrieves every %s object in the pool. With no parameters the \
-              cmdlet fetches the whole collection."
-             stem
+      let selectors =
+        help_or
+          (( if has_name obj then
+               ["-Name"]
+             else
+               []
+           )
+          @ ( if has_uuid obj then
+                ["-Uuid"]
+              else
+                []
+            )
+          @ ["-Ref"]
           )
+      in
+      (* Every pool has exactly one Pool object, a standalone host included,
+         so "the Pool objects in the pool" would describe a collection that is
+         never more than one. *)
+      let singleton = classname = "pool" in
+      let ex =
+        ( if singleton then
+            help_example
+              ~title:(sprintf "Get the %s" stem)
+              (sprintf "PS> Get-Xen%s" stem)
+              (sprintf
+                 "Retrieves the %s object. There is exactly one, so no \
+                  parameters are needed."
+                 stem
+              )
+          else
+            help_example
+              ~title:(sprintf "List every %s" stem)
+              (sprintf "PS> Get-Xen%s" stem)
+              (sprintf
+                 "Retrieves every %s object in the pool. With no parameters \
+                  the cmdlet fetches the whole collection."
+                 stem
+              )
+        )
         :: List.map
              (fun (code, how, why) ->
                help_example
@@ -1736,29 +1766,28 @@ and help_for_class obj =
            database, so connected to one host the getter still returns the
            objects of every host. A standalone host is a pool of one. *)
         help_command ~name:(sprintf "Get-Xen%s" stem) ~deprecated:dep
-          ~synopsis:(sprintf "Gets the %s objects in the pool." stem)
+          ~synopsis:
+            ( if singleton then
+                sprintf "Gets the %s object." stem
+              else
+                sprintf "Gets the %s objects in the pool." stem
+            )
           ~description:
             (described
                (String.concat "\n"
-                  (sprintf
-                     "Retrieves the %s objects in the pool. With no parameters \
-                      the cmdlet returns the whole collection; use %s to \
-                      select one."
-                     stem
-                     (help_or
-                        (( if has_name obj then
-                             ["-Name"]
-                           else
-                             []
-                         )
-                        @ ( if has_uuid obj then
-                              ["-Uuid"]
-                            else
-                              []
-                          )
-                        @ ["-Ref"]
-                        )
-                     )
+                  (( if singleton then
+                       sprintf
+                         "Retrieves the %s object. Every pool has exactly one, \
+                          a standalone host included, so with no parameters \
+                          the cmdlet returns it; use %s to name it."
+                         stem selectors
+                     else
+                       sprintf
+                         "Retrieves the %s objects in the pool. With no \
+                          parameters the cmdlet returns the whole collection; \
+                          use %s to select one."
+                         stem selectors
+                   )
                   :: class_definition
                   )
                )
