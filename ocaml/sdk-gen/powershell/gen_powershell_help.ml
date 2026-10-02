@@ -353,6 +353,150 @@ let rec gen_help () =
         (String.concat ", " orphans) ;
       exit 1
 
+(* What each query argument of an HTTP action does. The datamodel declares the
+   arguments but documents none of them, so these are written from the
+   handlers that read them: import.ml and importexport.ml, export.ml,
+   import_raw_vdi.ml and export_raw_vdi.ml, system_status.ml, audit_log.ml,
+   wlb_reports.ml, xapi_blob.ml, console.ml, xapi_pool_patch.ml, and
+   rrdd_http_handler.ml in xcp-rrdd. Keyed by action and parameter name. *)
+and help_http_arg_doc action arg =
+  let json =
+    "If specified, with any value, the data is returned as JSON rather than \
+     XML."
+  in
+  let restore =
+    "If true, the VM keeps the UUID it was exported with, replacing any \
+     existing VM with that UUID. The existing VM must be halted and older than \
+     the one imported, unless -Force is set."
+  in
+  let force =
+    "If true, the import continues past checks that would otherwise fail it: \
+     with -Restore, an export no newer than the existing VM still replaces it, \
+     and a running VM that would be replaced is skipped rather than failing \
+     the import."
+  in
+  let default_sr what =
+    sprintf
+      "The opaque reference of the SR to %s. Without it the pool's default SR \
+       is used."
+      what
+  in
+  match (action, arg) with
+  | "get_audit_log", "Since" ->
+      Some
+        "Returns only the entries logged since this time, given in ISO 8601 \
+         form such as 2026-09-10. Without it the whole audit log is returned."
+  | "get_export", "Uuid" ->
+      Some "The UUID of the VM to export."
+  | "get_export", "UseCompression" ->
+      Some
+        "Compresses the export: \"true\" or \"gzip\" for gzip, \"zstd\" for \
+         zstd. Any other value, or none, exports it uncompressed."
+  | "get_export", "PreservePowerState" ->
+      Some
+        "If true, the export keeps the VM's current power state, with the \
+         suspend image of a suspended VM so that it can be resumed after \
+         import. Otherwise the VM is exported as halted."
+  | "get_export_metadata", "Uuid" ->
+      Some "The UUID of the VM whose metadata to export. Ignored with -All."
+  | "get_export_metadata", "All" ->
+      Some
+        "If true, exports the metadata of every VM in the pool except the \
+         default templates, rather than the one named by -Uuid. Defaults to \
+         false."
+  | "get_export_metadata", "IncludeDom0" ->
+      Some
+        "With -All, whether to include the control domains. Defaults to true."
+  | "get_export_metadata", "IncludeVhdParents" ->
+      Some
+        "If true, also exports the parent VDIs in the VHD chain of each disk. \
+         Defaults to false."
+  | "get_export_metadata", "ExportSnapshots" ->
+      Some
+        "Whether to include the metadata of the VMs' snapshots. Defaults to \
+         true."
+  | "get_export_metadata", "ExcludedDeviceTypes" ->
+      Some
+        "A comma-separated list of the device types to leave out of the \
+         export: vif, vbd, vgpu and vtpm."
+  | "get_export_raw_vdi", "Vdi" ->
+      Some "The VDI to export, given by UUID or opaque reference."
+  | "get_export_raw_vdi", "Format" ->
+      Some "The format to export in: raw (the default), vhd, tar or qcow2."
+  | "get_system_status", "Entries" ->
+      Some
+        "A comma-separated list of the capabilities to collect. \
+         Get-XenHostProperty -XenProperty SystemStatusCapabilities lists the \
+         ones a host offers."
+  | "get_system_status", "Output" ->
+      Some
+        "The archive format of the report: tar (the default), tar.bz2 or zip."
+  | "get_vncsnapshot", "Uuid" ->
+      Some
+        "The UUID of the VM whose console to capture, or of a console. For a \
+         VM its default VNC console is used."
+  | "get_wlb_report", "Report" ->
+      Some "The name of the Workload Balancing report to run."
+  | "get_wlb_report", "Args" ->
+      Some
+        "The report's parameters, as alternating names and values, passed to \
+         Workload Balancing unchanged."
+  | ("host_rrd" | "vm_rrd" | "rrd_updates"), "Json" ->
+      Some json
+  | "vm_rrd", "Uuid" ->
+      Some "The UUID of the VM whose RRD to retrieve."
+  | "sr_rrd", "Uuid" ->
+      Some "The UUID of the SR whose RRD to retrieve."
+  | "rrd_updates", "Start" ->
+      Some
+        "The time to return updates from, in seconds since the Unix epoch. A \
+         negative value counts back from the latest update, so -600 returns \
+         the last ten minutes. Required."
+  | "rrd_updates", "Cf" ->
+      Some
+        "Limits the data to archives of one consolidation function: AVERAGE, \
+         MIN, MAX or LAST."
+  | "rrd_updates", "Interval" ->
+      Some
+        "The resolution wanted, in seconds. The server uses the archive that \
+         best matches it and still covers the start time."
+  | "rrd_updates", "IsHost" ->
+      Some "If true, includes the host's own data as well as the VMs'."
+  | "rrd_updates", "Uuid" ->
+      (* rrdd filters on vm_uuid and sr_uuid; nothing reads uuid. *)
+      Some
+        "Has no effect: the server returns the data of every VM. Its handler \
+         filters on vm_uuid and sr_uuid, which this cmdlet does not send."
+  | "put_blob", "Ref" ->
+      Some
+        "The opaque reference of the blob to upload into. Create one first \
+         with the CreateNewBlob action of the object it belongs to."
+  | ("put_import" | "put_import_metadata"), "Restore" ->
+      Some restore
+  | ("put_import" | "put_import_metadata"), "Force" ->
+      Some force
+  | "put_import", "SrId" ->
+      Some (default_sr "import the disks into")
+  | "put_import_metadata", "DryRun" ->
+      Some
+        "If true, checks the metadata against the pool and reports the result \
+         without importing anything."
+  | "put_import_raw_vdi", "Vdi" ->
+      Some
+        "The VDI to write the data into, given by UUID or opaque reference. \
+         Needed: without it the server tries to create a VDI, which requires \
+         an SR this cmdlet does not send."
+  | "put_import_raw_vdi", "Format" ->
+      Some "The format of the uploaded data: raw (the default), vhd or qcow2."
+  | "put_import_raw_vdi", "Chunked" ->
+      Some
+        "If specified, the upload uses chunked transfer encoding, which only \
+         the raw format supports."
+  | "put_pool_patch_upload", "SrId" ->
+      Some (default_sr "store the patch in")
+  | _ ->
+      None
+
 (* The parameters every HTTP-action cmdlet inherits from XenServerHttpCmdlet
    and XenServerCmdlet. External help replaces reflection wholesale, so these
    have to be restated or the cmdlets end up documented with no parameters at
@@ -423,8 +567,12 @@ and help_http_actions () =
                 "false"
             in
             help_param ~pipeline (http_arg_name a) (http_arg_type a)
-              (sprintf "The '%s' query argument of the '%s' interface."
-                 (http_arg_name a) name
+              ( match help_http_arg_doc name (http_arg_name a) with
+              | Some doc ->
+                  doc
+              | None ->
+                  sprintf "The '%s' query argument of the '%s' interface."
+                    (http_arg_name a) name
               )
           )
           args
