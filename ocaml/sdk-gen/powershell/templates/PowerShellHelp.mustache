@@ -104,6 +104,9 @@
         <dev:code>{{{code}}}</dev:code>
         <dev:remarks>
           <maml:para>{{{remarks}}}</maml:para>
+{{! An empty paragraph is how MAML asks for a blank line: without it Get-Help
+    runs each example's remarks straight into the next example's title. }}
+          <maml:para></maml:para>
         </dev:remarks>
       </command:example>
 {{/examples}}

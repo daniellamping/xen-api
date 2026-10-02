@@ -128,6 +128,7 @@
         <dev:code>Get-XenVM -Name &quot;my vm&quot;</dev:code>
         <dev:remarks>
           <maml:para>Gets the VM whose name_label is 'my vm'.</maml:para>
+          <maml:para></maml:para>
         </dev:remarks>
       </command:example>
     </command:examples>
