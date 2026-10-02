@@ -2136,10 +2136,15 @@ and help_for_class obj =
         let lines =
           List.map
             (fun m ->
-              sprintf "%s: %s%s"
-                (cut_msg_name (pascal_case m.msg_name) verb)
-                (help_sentence m.msg_doc)
-                (help_lifecycle_tag m.msg_lifecycle)
+              let name = cut_msg_name (pascal_case m.msg_name) verb in
+              let tag = help_lifecycle_tag m.msg_lifecycle in
+              (* Some messages carry no doc at all; the name alone reads
+                 better than a label with nothing after it. *)
+              match help_sentence m.msg_doc with
+              | "" ->
+                  name ^ tag
+              | doc ->
+                  sprintf "%s: %s%s" name doc tag
             )
             ms
         in
