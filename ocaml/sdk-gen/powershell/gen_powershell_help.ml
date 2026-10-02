@@ -69,6 +69,17 @@ let current_release_name = help_release_name rel_current
    rpm-style comparison for the numbered releases. *)
 let released_before_current code = compare_versions code rel_current < 0
 
+(* The release and reason a lifecycle records for [change], if it has one. *)
+let help_lifecycle_at (lc : Lifecycle.t) change =
+  List.fold_left
+    (fun acc (c, release, doc) ->
+      if c = change then
+        Some (release, doc)
+      else
+        acc
+    )
+    None lc.Lifecycle.transitions
+
 (* The label and sentence marking a class, message or field a reader should
    not be reaching for.
 
@@ -94,16 +105,7 @@ let released_before_current code = compare_versions code rel_current < 0
    help rather than dropping the cmdlet. Dropping it would break the users it
    still serves. *)
 let help_deprecation ~noun (lc : Lifecycle.t) =
-  let at change =
-    List.fold_left
-      (fun acc (c, release, doc) ->
-        if c = change then
-          Some (release, doc)
-        else
-          acc
-      )
-      None lc.Lifecycle.transitions
-  in
+  let at = help_lifecycle_at lc in
   let because doc =
     if doc = "" then
       ""
@@ -148,6 +150,33 @@ let help_deprecation ~noun (lc : Lifecycle.t) =
         )
   | _ ->
       None
+
+(* The same facts in a few words, for one operation in a cmdlet's list of
+   them. It says which release the change came in and what that means for the
+   reader, which a bare "[removed]" did not: the operation is still listed
+   because it still works against an older host. *)
+let help_lifecycle_tag (lc : Lifecycle.t) =
+  match lc.Lifecycle.state with
+  | Lifecycle.Removed_s -> (
+    match help_lifecycle_at lc Lifecycle.Removed with
+    | Some (r, _) when released_before_current r ->
+        sprintf " (Removed in %s; works only against an older host.)"
+          (help_release_name r)
+    | Some (r, _) ->
+        sprintf " (Removed in %s; still works on %s and earlier.)"
+          (help_release_name r) current_release_name
+    | None ->
+        " (Removed; works only against a host that still has it.)"
+  )
+  | Lifecycle.Deprecated_s -> (
+    match help_lifecycle_at lc Lifecycle.Deprecated with
+    | Some (r, _) ->
+        sprintf " (Deprecated since %s.)" (help_release_name r)
+    | None ->
+        " (Deprecated.)"
+  )
+  | _ ->
+      ""
 
 (* Put a deprecation note in front of a description rather than after it. A
    reader who stops at the first sentence is exactly the reader who most needs
@@ -2107,18 +2136,10 @@ and help_for_class obj =
         let lines =
           List.map
             (fun m ->
-              let tag =
-                match m.msg_lifecycle.Lifecycle.state with
-                | Lifecycle.Removed_s ->
-                    " [removed]"
-                | Lifecycle.Deprecated_s ->
-                    " [deprecated]"
-                | _ ->
-                    ""
-              in
               sprintf "%s: %s%s"
                 (cut_msg_name (pascal_case m.msg_name) verb)
-                (help_sentence m.msg_doc) tag
+                (help_sentence m.msg_doc)
+                (help_lifecycle_tag m.msg_lifecycle)
             )
             ms
         in
